@@ -13,7 +13,7 @@
 class SpectralDisplayComponent final : public juce::Component
 {
 public:
-    static constexpr int   fftOrder = 11;
+    static constexpr int   fftOrder = 14;
     static constexpr int   fftSize  = 1 << fftOrder;    // 2048
     static constexpr float minFreq  = 30.0f;
     static constexpr float floorDb  = -80.0f;
