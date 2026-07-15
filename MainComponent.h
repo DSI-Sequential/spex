@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -21,10 +22,13 @@ public:
     void resized() override;
 
 private:
+    void openAudioSettings();
     void timerCallback() override;
 
+    juce::TextButton          audioSettingsButton { "Audio Settings" };
     SpectralDisplayComponent spectralDisplay;
     std::vector<float>       monoScratch;
+    std::unique_ptr<juce::DialogWindow> audioSettingsWindow;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

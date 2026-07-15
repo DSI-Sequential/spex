@@ -2,6 +2,8 @@
 
 MainComponent::MainComponent()
 {
+    audioSettingsButton.onClick = [this] { openAudioSettings(); };
+    addAndMakeVisible(audioSettingsButton);
     addAndMakeVisible(spectralDisplay);
 
     setSize(1000, 640);
@@ -67,11 +69,65 @@ void MainComponent::releaseResources()
 void MainComponent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff0c0c0c));
+
+    g.setColour(juce::Colour(0x88ffffff));
+    g.setFont(14.0f);
+    g.drawText("Realtime audio spectrum", 16, 12, 220, 24, juce::Justification::centredLeft, false);
 }
 
 void MainComponent::resized()
 {
-    spectralDisplay.setBounds(getLocalBounds());
+    auto bounds = getLocalBounds().reduced(12);
+    auto header = bounds.removeFromTop(40);
+
+    audioSettingsButton.setBounds(header.removeFromRight(150));
+    spectralDisplay.setBounds(bounds);
+}
+
+void MainComponent::openAudioSettings()
+{
+    if (audioSettingsWindow != nullptr)
+    {
+        audioSettingsWindow->toFront(true);
+        return;
+    }
+
+    auto* selector = new juce::AudioDeviceSelectorComponent(deviceManager,
+                                                            0,
+                                                            256,
+                                                            0,
+                                                            256,
+                                                            true,
+                                                            true,
+                                                            true,
+                                                            false);
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(selector);
+    options.dialogTitle = "Audio Settings";
+    options.dialogBackgroundColour = juce::Colour(0xff1a1a1a);
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+
+    if (auto* topLevel = getTopLevelComponent())
+        options.componentToCentreAround = topLevel;
+    else
+        options.componentToCentreAround = this;
+
+    audioSettingsWindow.reset(options.launchAsync());
+
+    if (audioSettingsWindow != nullptr)
+    {
+        audioSettingsWindow->setAlwaysOnTop(true);
+        audioSettingsWindow->setSize(520, 460);
+        audioSettingsWindow->enterModalState(true,
+                                             juce::ModalCallbackFunction::create([this](int)
+                                             {
+                                                 audioSettingsWindow.reset();
+                                             }),
+                                             true);
+    }
 }
 
 void MainComponent::timerCallback()
