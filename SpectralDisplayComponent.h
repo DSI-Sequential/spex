@@ -13,8 +13,23 @@
 class SpectralDisplayComponent final : public juce::Component
 {
 public:
+    enum FeatureIndex
+    {
+        windowedPeakAmplitude = 0,
+        slidingWindowRms,
+        interpolatedSpectralPeak,
+        papr,
+        spectralFlatness,
+        numFeatures
+    };
+
+    struct FeatureSnapshot
+    {
+        std::array<float, numFeatures> values {};
+    };
+
     static constexpr int   fftOrder = 14;
-    static constexpr int   fftSize  = 1 << fftOrder;    // 2048
+    static constexpr int   fftSize  = 1 << fftOrder;
     static constexpr float minFreq  = 30.0f;
     static constexpr float floorDb  = -80.0f;
 
@@ -29,6 +44,7 @@ public:
     }
 
     void setSampleRate(float sr) { sampleRate = sr; }
+    FeatureSnapshot getLatestFeatureSnapshot() const { return latestFeatures; }
 
     // Audio thread: push samples into the ring buffer.
     void pushSamples(const float* data, int n)
@@ -44,18 +60,27 @@ public:
     }
 
     // Message thread: compute FFT, push waterfall row, repaint.
-    void update()
+    bool update()
     {
-        if (!hasNew.exchange(false, std::memory_order_acquire)) return;
+        if (!hasNew.exchange(false, std::memory_order_acquire)) return false;
 
         // Copy ring buffer (oldest → newest) with Hann window applied.
         const int rp = wPos.load(std::memory_order_acquire);
+        float peakAbs = 0.0f;
+        double sumSquares = 0.0;
         for (int i = 0; i < fftSize; ++i)
-            fftBuf[i] = ring[(rp + i) % fftSize] * hannWin[i];
+        {
+            const float raw = ring[(rp + i) % fftSize];
+            peakAbs = std::max(peakAbs, std::abs(raw));
+            sumSquares += static_cast<double>(raw) * static_cast<double>(raw);
+            fftBuf[i] = raw * hannWin[i];
+        }
         std::fill(fftBuf.begin() + fftSize, fftBuf.end(), 0.0f);
 
         // FFT → magnitudes in fftBuf[0..fftSize/2].
         fft.performFrequencyOnlyForwardTransform(fftBuf.data());
+
+        computeFeatures(peakAbs, sumSquares);
 
         // Normalise and smooth.
         const float normDb = juce::Decibels::gainToDecibels(static_cast<float>(fftSize));
@@ -70,6 +95,7 @@ public:
 
         pushWaterfallRow();
         repaint();
+        return true;
     }
 
     void resized() override
@@ -253,7 +279,64 @@ private:
     std::atomic<bool> hasNew { false };
 
     float sampleRate { 44100.0f };
+    FeatureSnapshot latestFeatures {};
 
     juce::Image wfImg;
     int wfRow { 0 };
+
+    void computeFeatures(float peakAbs, double sumSquares)
+    {
+        constexpr float epsilon = 1.0e-12f;
+        const float meanPower = static_cast<float>(sumSquares / static_cast<double>(fftSize));
+        const float rms = std::sqrt(std::max(meanPower, epsilon));
+        const float safePeak = std::max(peakAbs, epsilon);
+
+        latestFeatures.values[windowedPeakAmplitude] =
+            juce::Decibels::gainToDecibels(safePeak, floorDb);
+        latestFeatures.values[slidingWindowRms] =
+            juce::Decibels::gainToDecibels(rms, floorDb);
+
+        const int maxBin = fftSize / 2;
+        int peakBin = 1;
+        for (int i = 2; i < maxBin; ++i)
+        {
+            if (fftBuf[i] > fftBuf[peakBin])
+                peakBin = i;
+        }
+
+        const float l = std::log(std::max(fftBuf[peakBin - 1], epsilon));
+        const float c = std::log(std::max(fftBuf[peakBin], epsilon));
+        const float r = std::log(std::max(fftBuf[peakBin + 1], epsilon));
+        const float denom = (l - 2.0f * c + r);
+        const float delta = std::abs(denom) > epsilon ? 0.5f * (l - r) / denom : 0.0f;
+        const float interpLogMag = c - 0.25f * (l - r) * delta;
+        const float interpMag = std::exp(interpLogMag);
+        latestFeatures.values[interpolatedSpectralPeak] =
+            juce::Decibels::gainToDecibels(interpMag, floorDb);
+
+        double logPowerSum = 0.0;
+        double powerSum = 0.0;
+        double maxPower = 0.0;
+        int count = 0;
+        for (int i = 1; i <= maxBin; ++i)
+        {
+            const double p = std::max(static_cast<double>(fftBuf[i]) * static_cast<double>(fftBuf[i]),
+                                      1.0e-20);
+            logPowerSum += std::log(p);
+            powerSum += p;
+            maxPower = std::max(maxPower, p);
+            ++count;
+        }
+
+        // Spectral PAPR is peak spectral power divided by average spectral power.
+        const double avgPower = powerSum / static_cast<double>(count);
+        const float spectralPapr = static_cast<float>(maxPower / std::max(avgPower, 1.0e-20));
+        latestFeatures.values[papr] = 10.0f * std::log10(std::max(spectralPapr, epsilon));
+
+        // Spectral flatness is GM(power spectrum) / AM(power spectrum).
+        const double gm = std::exp(logPowerSum / static_cast<double>(count));
+        const double am = avgPower;
+        const float flatness = static_cast<float>(gm / std::max(am, 1.0e-20));
+        latestFeatures.values[spectralFlatness] = flatness;
+    }
 };

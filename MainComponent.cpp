@@ -1,12 +1,273 @@
 #include "MainComponent.h"
 
+#include <algorithm>
+#include <cmath>
+#include <functional>
+
+namespace
+{
+constexpr int kFeatureCount = SpectralDisplayComponent::numFeatures;
+
+const std::array<const char*, kFeatureCount> kFeatureNames
+{
+    "Windowed Peak",
+    "Sliding RMS",
+    "Interpolated Spectral Peak",
+    "Spectral PAPR",
+    "Spectral Flatness"
+};
+
+const std::array<juce::Range<float>, kFeatureCount> kDefaultValueRanges
+{
+    juce::Range<float>(-90.0f, 0.0f),
+    juce::Range<float>(-90.0f, 0.0f),
+    juce::Range<float>(-90.0f, 20.0f),
+    juce::Range<float>(0.0f, 36.0f),
+    juce::Range<float>(0.0f, 1.0f)
+};
+
+const std::array<float, kFeatureCount> kSmoothingAlpha
+{
+    0.86f,
+    0.90f,
+    0.88f,
+    0.85f,
+    0.90f
+};
+
+const std::array<float, kFeatureCount> kHysteresis
+{
+    0.20f,
+    0.20f,
+    0.20f,
+    0.15f,
+    0.004f
+};
+
+const std::array<juce::Colour, kFeatureCount> kFeatureColours
+{
+    juce::Colour(0xff38bdf8),
+    juce::Colour(0xff22c55e),
+    juce::Colour(0xfff59e0b),
+    juce::Colour(0xffef4444),
+    juce::Colour(0xffa78bfa)
+};
+
+juce::String csvHeaderName(int featureIndex)
+{
+    switch (featureIndex)
+    {
+        case SpectralDisplayComponent::windowedPeakAmplitude:    return "windowed_peak_dbfs";
+        case SpectralDisplayComponent::slidingWindowRms:         return "rms_dbfs";
+        case SpectralDisplayComponent::interpolatedSpectralPeak: return "interp_spectral_peak_db";
+        case SpectralDisplayComponent::papr:                     return "spectral_papr_db";
+        case SpectralDisplayComponent::spectralFlatness:         return "spectral_flatness";
+        default:                                                 return "feature";
+    }
+}
+
+juce::String formatFeatureValueText(int featureIndex, float value)
+{
+    switch (featureIndex)
+    {
+        case SpectralDisplayComponent::spectralFlatness:
+            return juce::String(value, 4);
+        default:
+            return juce::String(value, 2) + " dB";
+    }
+}
+
+juce::Range<float> makeAutoscaledRange(int featureIndex,
+                                       float minValue,
+                                       float maxValue,
+                                       bool hasBounds)
+{
+    const auto fallback = kDefaultValueRanges[static_cast<size_t>(featureIndex)];
+    if (!hasBounds)
+        return fallback;
+
+    const float lo = std::min(minValue, maxValue);
+    const float hi = std::max(minValue, maxValue);
+    const float span = hi - lo;
+    const float pad = std::max(span * 0.1f, featureIndex == SpectralDisplayComponent::spectralFlatness ? 0.005f : 0.1f);
+
+    float start = lo - pad;
+    float end = hi + pad;
+
+    if (span < 1.0e-6f)
+    {
+        const float center = lo;
+        const float halfWidth = featureIndex == SpectralDisplayComponent::spectralFlatness ? 0.02f : 0.5f;
+        start = center - halfWidth;
+        end = center + halfWidth;
+    }
+
+    if (featureIndex == SpectralDisplayComponent::spectralFlatness)
+    {
+        start = std::max(0.0f, start);
+        end = std::min(1.0f, end);
+        if (end - start < 0.01f)
+            end = std::min(1.0f, start + 0.01f);
+    }
+
+    return { start, end };
+}
+
+void drawTrace(juce::Graphics& g,
+               juce::Rectangle<float> area,
+               const std::vector<float>& history,
+               juce::Range<float> valueRange,
+               juce::Colour colour)
+{
+    g.setColour(juce::Colour(0x141ffffff));
+    g.fillRoundedRectangle(area, 4.0f);
+
+    if (history.size() < 2)
+        return;
+
+    g.setColour(juce::Colour(0x20ffffff));
+    g.drawLine(area.getX(), area.getCentreY(), area.getRight(), area.getCentreY(), 1.0f);
+
+    juce::Path trace;
+    const auto clampToRange = [&](float value)
+    {
+        return std::clamp(value, valueRange.getStart(), valueRange.getEnd());
+    };
+
+    const float minV = valueRange.getStart();
+    const float maxV = valueRange.getEnd();
+    const float xStep = area.getWidth() / static_cast<float>(history.size() - 1);
+
+    for (size_t i = 0; i < history.size(); ++i)
+    {
+        const float x = area.getX() + xStep * static_cast<float>(i);
+        const float clamped = clampToRange(history[i]);
+        const float y = juce::jmap(clamped, minV, maxV, area.getBottom(), area.getY());
+
+        if (i == 0)
+            trace.startNewSubPath(x, y);
+        else
+            trace.lineTo(x, y);
+    }
+
+    g.setColour(colour.withAlpha(0.95f));
+    g.strokePath(trace, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+class FeatureStackContent final : public juce::Component
+{
+public:
+    FeatureStackContent() = default;
+
+    void setData(const std::array<std::vector<float>, kFeatureCount>& sourceHistory,
+                 const std::array<float, kFeatureCount>& sourceCurrent,
+                 const std::array<float, kFeatureCount>& sourceMins,
+                 const std::array<float, kFeatureCount>& sourceMaxs,
+                 const std::array<bool, kFeatureCount>& sourceHasBounds)
+    {
+        history = sourceHistory;
+        current = sourceCurrent;
+        mins = sourceMins;
+        maxs = sourceMaxs;
+        hasBounds = sourceHasBounds;
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff0b0d10));
+
+        auto area = getLocalBounds().reduced(16);
+        const int rowGap = 10;
+        const int rowHeight = std::max(74, (area.getHeight() - rowGap * (kFeatureCount - 1)) / kFeatureCount);
+
+        for (int i = 0; i < kFeatureCount; ++i)
+        {
+            auto row = area.removeFromTop(rowHeight);
+            if (i < kFeatureCount - 1)
+                area.removeFromTop(rowGap);
+
+            g.setColour(juce::Colour(0x201f2937));
+            g.fillRoundedRectangle(row.toFloat(), 7.0f);
+            g.setColour(juce::Colour(0x40ffffff));
+            g.drawRoundedRectangle(row.toFloat(), 7.0f, 1.0f);
+
+            auto title = row.removeFromTop(22).reduced(10, 0);
+            g.setColour(juce::Colour(0xffdbeafe));
+            g.setFont(14.0f);
+            g.drawText(kFeatureNames[static_cast<size_t>(i)], title.removeFromLeft(280), juce::Justification::centredLeft, false);
+
+            g.setColour(kFeatureColours[static_cast<size_t>(i)]);
+            g.setFont(14.0f);
+            g.drawText(formatFeatureValueText(i, current[static_cast<size_t>(i)]), title, juce::Justification::centredRight, false);
+
+            drawTrace(g,
+                      row.reduced(10, 6).toFloat(),
+                      history[static_cast<size_t>(i)],
+                      makeAutoscaledRange(i,
+                                          mins[static_cast<size_t>(i)],
+                                          maxs[static_cast<size_t>(i)],
+                                          hasBounds[static_cast<size_t>(i)]),
+                      kFeatureColours[static_cast<size_t>(i)]);
+        }
+    }
+
+private:
+    std::array<std::vector<float>, kFeatureCount> history;
+    std::array<float, kFeatureCount> current {};
+    std::array<float, kFeatureCount> mins {};
+    std::array<float, kFeatureCount> maxs {};
+    std::array<bool, kFeatureCount> hasBounds {};
+};
+
+class FeatureStackWindow final : public juce::DocumentWindow
+{
+public:
+    FeatureStackWindow(FeatureStackContent* content, std::function<void()> onClose)
+        : juce::DocumentWindow("Feature Trace Stack",
+                               juce::Colour(0xff111827),
+                               juce::DocumentWindow::allButtons),
+          onCloseCallback(std::move(onClose))
+    {
+        setUsingNativeTitleBar(true);
+        setResizable(true, true);
+        setResizeLimits(640, 360, 2400, 1800);
+        setContentOwned(content, true);
+        centreWithSize(980, 760);
+        setVisible(true);
+    }
+
+    void closeButtonPressed() override
+    {
+        if (onCloseCallback)
+            onCloseCallback();
+    }
+
+private:
+    std::function<void()> onCloseCallback;
+};
+}
+
 MainComponent::MainComponent()
 {
     audioSettingsButton.onClick = [this] { openAudioSettings(); };
+    featureStackButton.onClick = [this] { openFeatureStackWindow(); };
+    captureButton.onClick = [this] { toggleCapture(); };
+    exportCsvButton.onClick = [this] { exportCaptureCsv(); };
+
+    exportCsvButton.setEnabled(false);
+
     addAndMakeVisible(audioSettingsButton);
+    addAndMakeVisible(featureStackButton);
+    addAndMakeVisible(captureButton);
+    addAndMakeVisible(exportCsvButton);
     addAndMakeVisible(spectralDisplay);
 
-    setSize(1000, 640);
+    for (auto& history : featureHistory)
+        history.reserve(featureHistoryLength + 16);
+
+    resetAutoscaleBounds();
+
+    setSize(1320, 760);
 
     // 2 input channels (analysis source), 2 output channels (kept silent).
     setAudioChannels(2, 2);
@@ -16,6 +277,7 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    featureStackWindow.reset();
     shutdownAudio();
 }
 
@@ -72,7 +334,14 @@ void MainComponent::paint(juce::Graphics& g)
 
     g.setColour(juce::Colour(0x88ffffff));
     g.setFont(14.0f);
-    g.drawText("Realtime audio spectrum", 16, 12, 220, 24, juce::Justification::centredLeft, false);
+    g.drawText("Realtime audio spectrum", 16, 12, 280, 24, juce::Justification::centredLeft, false);
+
+    g.setColour(juce::Colour(0x30ffffff));
+    g.drawVerticalLine(featurePanelBounds.getX() - 8,
+                       static_cast<float>(featurePanelBounds.getY()),
+                       static_cast<float>(featurePanelBounds.getBottom()));
+
+    paintFeaturePanel(g, featurePanelBounds);
 }
 
 void MainComponent::resized()
@@ -80,8 +349,16 @@ void MainComponent::resized()
     auto bounds = getLocalBounds().reduced(12);
     auto header = bounds.removeFromTop(40);
 
-    audioSettingsButton.setBounds(header.removeFromRight(150));
-    spectralDisplay.setBounds(bounds);
+    exportCsvButton.setBounds(header.removeFromRight(124));
+    header.removeFromRight(8);
+    captureButton.setBounds(header.removeFromRight(124));
+    header.removeFromRight(8);
+    featureStackButton.setBounds(header.removeFromRight(132));
+    header.removeFromRight(8);
+    audioSettingsButton.setBounds(header.removeFromRight(148));
+
+    featurePanelBounds = bounds.removeFromRight(360);
+    spectralDisplay.setBounds(bounds.reduced(0, 0));
 }
 
 void MainComponent::openAudioSettings()
@@ -130,7 +407,223 @@ void MainComponent::openAudioSettings()
     }
 }
 
+void MainComponent::openFeatureStackWindow()
+{
+    if (featureStackWindow != nullptr)
+    {
+        featureStackWindow->toFront(true);
+        return;
+    }
+
+    auto* content = new FeatureStackContent();
+    content->setData(featureHistory, displayedValues, runningMinValues, runningMaxValues, hasAutoscaleBounds);
+    featureStackContent = content;
+
+    featureStackWindow = std::make_unique<FeatureStackWindow>(content, [this]
+    {
+        featureStackContent = nullptr;
+        featureStackWindow.reset();
+    });
+}
+
+void MainComponent::toggleCapture()
+{
+    captureEnabled = !captureEnabled;
+    captureButton.setButtonText(captureEnabled ? "Stop Capture" : "Start Capture");
+
+    if (captureEnabled)
+    {
+        captureRows.clear();
+        resetAutoscaleBounds();
+        captureStartMs = juce::Time::getMillisecondCounterHiRes();
+        exportCsvButton.setEnabled(false);
+    }
+    else
+    {
+        exportCsvButton.setEnabled(!captureRows.empty());
+    }
+}
+
+void MainComponent::exportCaptureCsv()
+{
+    if (captureRows.empty())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                                               "Export CSV",
+                                               "No captured data is available yet. Start capture first.");
+        return;
+    }
+
+    exportChooser = std::make_unique<juce::FileChooser>("Export feature capture CSV",
+                                                         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                                                             .getChildFile("spex_feature_capture.csv"),
+                                                         "*.csv");
+
+    const int flags = juce::FileBrowserComponent::saveMode
+                    | juce::FileBrowserComponent::canSelectFiles
+                    | juce::FileBrowserComponent::warnAboutOverwriting;
+
+    exportChooser->launchAsync(flags, [this](const juce::FileChooser& chooser)
+    {
+        const auto target = chooser.getResult();
+        if (target == juce::File())
+            return;
+
+        juce::StringArray lines;
+        juce::String header = "time_seconds";
+        for (int i = 0; i < featureCount; ++i)
+            header << "," << csvHeaderName(i);
+        lines.add(header);
+
+        for (const auto& row : captureRows)
+        {
+            juce::String line;
+            line << juce::String(row.timeSeconds, 6);
+
+            for (int i = 0; i < featureCount; ++i)
+                line << "," << juce::String(row.values[static_cast<size_t>(i)], 6);
+
+            lines.add(line);
+        }
+
+        if (!target.replaceWithText(lines.joinIntoString("\n")))
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                   "Export CSV",
+                                                   "Failed to write CSV file.");
+        }
+
+        exportChooser.reset();
+    });
+}
+
+void MainComponent::updateFeatureState(const SpectralDisplayComponent::FeatureSnapshot& snapshot)
+{
+    for (int i = 0; i < featureCount; ++i)
+    {
+        const size_t index = static_cast<size_t>(i);
+        const float raw = snapshot.values[index];
+
+        if (!hasDisplayedValues[index])
+        {
+            hasDisplayedValues[index] = true;
+            filteredValues[index] = raw;
+            displayedValues[index] = raw;
+        }
+        else
+        {
+            filteredValues[index] = kSmoothingAlpha[index] * filteredValues[index]
+                                  + (1.0f - kSmoothingAlpha[index]) * raw;
+
+            if (std::abs(filteredValues[index] - displayedValues[index]) >= kHysteresis[index])
+                displayedValues[index] = filteredValues[index];
+        }
+
+        auto& history = featureHistory[index];
+        history.push_back(displayedValues[index]);
+
+        if (!hasAutoscaleBounds[index])
+        {
+            hasAutoscaleBounds[index] = true;
+            runningMinValues[index] = displayedValues[index];
+            runningMaxValues[index] = displayedValues[index];
+        }
+        else
+        {
+            runningMinValues[index] = std::min(runningMinValues[index], displayedValues[index]);
+            runningMaxValues[index] = std::max(runningMaxValues[index], displayedValues[index]);
+        }
+
+        if (history.size() > static_cast<size_t>(featureHistoryLength))
+            history.erase(history.begin(), history.begin() + static_cast<std::ptrdiff_t>(history.size() - featureHistoryLength));
+    }
+}
+
+void MainComponent::resetAutoscaleBounds()
+{
+    hasAutoscaleBounds.fill(false);
+    runningMinValues.fill(0.0f);
+    runningMaxValues.fill(0.0f);
+}
+
+juce::String MainComponent::formatFeatureValue(int featureIndex, float value) const
+{
+    return formatFeatureValueText(featureIndex, value);
+}
+
+void MainComponent::paintFeaturePanel(juce::Graphics& g, juce::Rectangle<int> bounds) const
+{
+    auto panel = bounds.reduced(8);
+    g.setColour(juce::Colour(0x14111827));
+    g.fillRoundedRectangle(panel.toFloat(), 8.0f);
+
+    g.setColour(juce::Colour(0x40ffffff));
+    g.drawRoundedRectangle(panel.toFloat(), 8.0f, 1.0f);
+
+    panel.reduce(10, 10);
+    const int rowGap = 8;
+    const int rowHeight = std::max(62, (panel.getHeight() - rowGap * (featureCount - 1)) / featureCount);
+
+    for (int i = 0; i < featureCount; ++i)
+    {
+        auto row = panel.removeFromTop(rowHeight);
+        if (i < featureCount - 1)
+            panel.removeFromTop(rowGap);
+
+        g.setColour(juce::Colour(0x1cffffff));
+        g.fillRoundedRectangle(row.toFloat(), 6.0f);
+
+        auto title = row.removeFromTop(20).reduced(8, 0);
+        g.setColour(juce::Colour(0xffe5e7eb));
+        g.setFont(13.0f);
+        g.drawText(kFeatureNames[static_cast<size_t>(i)], title.removeFromLeft(220), juce::Justification::centredLeft, false);
+
+        g.setColour(kFeatureColours[static_cast<size_t>(i)]);
+        g.setFont(13.0f);
+        g.drawText(formatFeatureValue(i, displayedValues[static_cast<size_t>(i)]),
+                   title,
+                   juce::Justification::centredRight,
+                   false);
+
+        drawTrace(g,
+                  row.reduced(8, 5).toFloat(),
+                  featureHistory[static_cast<size_t>(i)],
+                  makeAutoscaledRange(i,
+                                      runningMinValues[static_cast<size_t>(i)],
+                                      runningMaxValues[static_cast<size_t>(i)],
+                                      hasAutoscaleBounds[static_cast<size_t>(i)]),
+                  kFeatureColours[static_cast<size_t>(i)]);
+    }
+}
+
 void MainComponent::timerCallback()
 {
-    spectralDisplay.update();
+    if (!spectralDisplay.update())
+        return;
+
+    const auto snapshot = spectralDisplay.getLatestFeatureSnapshot();
+    updateFeatureState(snapshot);
+
+    if (captureEnabled)
+    {
+        CaptureRow row;
+        row.timeSeconds = (juce::Time::getMillisecondCounterHiRes() - captureStartMs) * 0.001;
+        row.values = displayedValues;
+        captureRows.push_back(row);
+    }
+
+    if (!captureEnabled)
+        exportCsvButton.setEnabled(!captureRows.empty());
+
+    if (featureStackContent != nullptr)
+    {
+        static_cast<FeatureStackContent*>(featureStackContent)->setData(featureHistory,
+                                                                       displayedValues,
+                                                                       runningMinValues,
+                                                                       runningMaxValues,
+                                                                       hasAutoscaleBounds);
+        featureStackContent->repaint();
+    }
+
+    repaint();
 }
