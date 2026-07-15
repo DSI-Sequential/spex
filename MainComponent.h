@@ -36,6 +36,8 @@ private:
     void openFeatureStackWindow();
     void toggleCapture();
     void exportCaptureCsv();
+    void applyFeatureFrequencyRangeFromUi();
+    void updateFrequencyRangeLabels();
     void updateFeatureState(const SpectralDisplayComponent::FeatureSnapshot& snapshot);
     void resetAutoscaleBounds();
     juce::String formatFeatureValue(int featureIndex, float value) const;
@@ -46,6 +48,12 @@ private:
     juce::TextButton          featureStackButton  { "Feature Stack" };
     juce::TextButton          captureButton       { "Start Capture" };
     juce::TextButton          exportCsvButton     { "Export CSV" };
+    juce::Label               minFeatureFreqLabel;
+    juce::Slider              minFeatureFreqSlider;
+    juce::Label               minFeatureFreqValueLabel;
+    juce::Label               maxFeatureFreqLabel;
+    juce::Slider              maxFeatureFreqSlider;
+    juce::Label               maxFeatureFreqValueLabel;
 
     SpectralDisplayComponent spectralDisplay;
     std::vector<float>       monoScratch;
@@ -68,6 +76,7 @@ private:
     std::unique_ptr<juce::DocumentWindow> featureStackWindow;
     juce::Component* featureStackContent { nullptr };
     std::unique_ptr<juce::FileChooser> exportChooser;
+    float currentNyquistHz { 22050.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

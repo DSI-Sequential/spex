@@ -256,16 +256,51 @@ MainComponent::MainComponent()
 
     exportCsvButton.setEnabled(false);
 
+    minFeatureFreqLabel.setText("Feature Min Hz", juce::dontSendNotification);
+    minFeatureFreqLabel.setJustificationType(juce::Justification::centredLeft);
+    minFeatureFreqLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
+
+    maxFeatureFreqLabel.setText("Feature Max Hz", juce::dontSendNotification);
+    maxFeatureFreqLabel.setJustificationType(juce::Justification::centredLeft);
+    maxFeatureFreqLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
+
+    minFeatureFreqSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    minFeatureFreqSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    minFeatureFreqSlider.setSkewFactorFromMidPoint(1000.0);
+    minFeatureFreqSlider.onValueChange = [this] { applyFeatureFrequencyRangeFromUi(); };
+
+    maxFeatureFreqSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    maxFeatureFreqSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    maxFeatureFreqSlider.setSkewFactorFromMidPoint(5000.0);
+    maxFeatureFreqSlider.onValueChange = [this] { applyFeatureFrequencyRangeFromUi(); };
+
+    minFeatureFreqValueLabel.setJustificationType(juce::Justification::centredRight);
+    minFeatureFreqValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
+    maxFeatureFreqValueLabel.setJustificationType(juce::Justification::centredRight);
+    maxFeatureFreqValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
+
     addAndMakeVisible(audioSettingsButton);
     addAndMakeVisible(featureStackButton);
     addAndMakeVisible(captureButton);
     addAndMakeVisible(exportCsvButton);
+    addAndMakeVisible(minFeatureFreqLabel);
+    addAndMakeVisible(minFeatureFreqSlider);
+    addAndMakeVisible(minFeatureFreqValueLabel);
+    addAndMakeVisible(maxFeatureFreqLabel);
+    addAndMakeVisible(maxFeatureFreqSlider);
+    addAndMakeVisible(maxFeatureFreqValueLabel);
     addAndMakeVisible(spectralDisplay);
 
     for (auto& history : featureHistory)
         history.reserve(featureHistoryLength + 16);
 
     resetAutoscaleBounds();
+
+    minFeatureFreqSlider.setRange(0.0, currentNyquistHz, 1.0);
+    maxFeatureFreqSlider.setRange(0.0, currentNyquistHz, 1.0);
+    minFeatureFreqSlider.setValue(0.0, juce::dontSendNotification);
+    maxFeatureFreqSlider.setValue(currentNyquistHz, juce::dontSendNotification);
+    applyFeatureFrequencyRangeFromUi();
 
     setSize(1320, 760);
 
@@ -284,6 +319,23 @@ MainComponent::~MainComponent()
 void MainComponent::prepareToPlay(int /*samplesPerBlockExpected*/, double sampleRate)
 {
     spectralDisplay.setSampleRate(static_cast<float>(sampleRate));
+
+    const float newNyquist = std::max(1.0f, static_cast<float>(sampleRate) * 0.5f);
+    const bool wasFullRange = maxFeatureFreqSlider.getValue() >= (currentNyquistHz - 1.0f);
+    const double previousMin = minFeatureFreqSlider.getValue();
+    const double previousMax = maxFeatureFreqSlider.getValue();
+
+    currentNyquistHz = newNyquist;
+    minFeatureFreqSlider.setRange(0.0, currentNyquistHz, 1.0);
+    maxFeatureFreqSlider.setRange(0.0, currentNyquistHz, 1.0);
+
+    minFeatureFreqSlider.setValue(std::clamp(previousMin, 0.0, static_cast<double>(currentNyquistHz)), juce::dontSendNotification);
+    maxFeatureFreqSlider.setValue(wasFullRange
+                                      ? static_cast<double>(currentNyquistHz)
+                                      : std::clamp(previousMax, 0.0, static_cast<double>(currentNyquistHz)),
+                                  juce::dontSendNotification);
+
+    applyFeatureFrequencyRangeFromUi();
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -357,8 +409,54 @@ void MainComponent::resized()
     header.removeFromRight(8);
     audioSettingsButton.setBounds(header.removeFromRight(148));
 
+    auto rangeRow = bounds.removeFromTop(34);
+    minFeatureFreqLabel.setBounds(rangeRow.removeFromLeft(108));
+    minFeatureFreqSlider.setBounds(rangeRow.removeFromLeft(250));
+    minFeatureFreqValueLabel.setBounds(rangeRow.removeFromLeft(72));
+    rangeRow.removeFromLeft(12);
+    maxFeatureFreqLabel.setBounds(rangeRow.removeFromLeft(108));
+    maxFeatureFreqSlider.setBounds(rangeRow.removeFromLeft(250));
+    maxFeatureFreqValueLabel.setBounds(rangeRow.removeFromLeft(72));
+
+    bounds.removeFromTop(6);
+
     featurePanelBounds = bounds.removeFromRight(360);
     spectralDisplay.setBounds(bounds.reduced(0, 0));
+}
+
+void MainComponent::applyFeatureFrequencyRangeFromUi()
+{
+    const float minHz = static_cast<float>(minFeatureFreqSlider.getValue());
+    const float maxHz = static_cast<float>(maxFeatureFreqSlider.getValue());
+
+    if (maxHz < minHz)
+    {
+        maxFeatureFreqSlider.setValue(minHz, juce::dontSendNotification);
+    }
+    else if (minHz > maxHz)
+    {
+        minFeatureFreqSlider.setValue(maxHz, juce::dontSendNotification);
+    }
+
+    const float appliedMin = static_cast<float>(minFeatureFreqSlider.getValue());
+    const float appliedMax = static_cast<float>(maxFeatureFreqSlider.getValue());
+    spectralDisplay.setFeatureFrequencyRange(appliedMin, appliedMax);
+    updateFrequencyRangeLabels();
+}
+
+void MainComponent::updateFrequencyRangeLabels()
+{
+    const auto formatHz = [](float hz) -> juce::String
+    {
+        if (hz >= 1000.0f)
+            return juce::String(hz / 1000.0f, 2) + " kHz";
+        return juce::String(hz, 0) + " Hz";
+    };
+
+    minFeatureFreqValueLabel.setText(formatHz(static_cast<float>(minFeatureFreqSlider.getValue())),
+                                     juce::dontSendNotification);
+    maxFeatureFreqValueLabel.setText(formatHz(static_cast<float>(maxFeatureFreqSlider.getValue())),
+                                     juce::dontSendNotification);
 }
 
 void MainComponent::openAudioSettings()

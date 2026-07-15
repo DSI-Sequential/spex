@@ -44,6 +44,11 @@ public:
     }
 
     void setSampleRate(float sr) { sampleRate = sr; }
+    void setFeatureFrequencyRange(float minHz, float maxHz)
+    {
+        featureMinHz = std::max(0.0f, minHz);
+        featureMaxHz = std::max(0.0f, maxHz);
+    }
     FeatureSnapshot getLatestFeatureSnapshot() const { return latestFeatures; }
 
     // Audio thread: push samples into the ring buffer.
@@ -280,6 +285,8 @@ private:
 
     float sampleRate { 44100.0f };
     FeatureSnapshot latestFeatures {};
+    float featureMinHz { 0.0f };
+    float featureMaxHz { 0.0f };
 
     juce::Image wfImg;
     int wfRow { 0 };
@@ -297,8 +304,29 @@ private:
             juce::Decibels::gainToDecibels(rms, floorDb);
 
         const int maxBin = fftSize / 2;
-        int peakBin = 1;
-        for (int i = 2; i < maxBin; ++i)
+        const float nyquist = sampleRate * 0.5f;
+        const float minHz = std::clamp(featureMinHz, 0.0f, nyquist);
+        const float maxHz = (featureMaxHz <= 0.0f)
+            ? nyquist
+            : std::clamp(featureMaxHz, minHz, nyquist);
+
+        int analysisStartBin = static_cast<int>(std::ceil(minHz * static_cast<float>(fftSize) / sampleRate));
+        int analysisEndBin = static_cast<int>(std::floor(maxHz * static_cast<float>(fftSize) / sampleRate));
+        analysisStartBin = std::clamp(analysisStartBin, 0, maxBin);
+        analysisEndBin = std::clamp(analysisEndBin, 0, maxBin);
+        if (analysisEndBin < analysisStartBin)
+            std::swap(analysisStartBin, analysisEndBin);
+
+        int searchStartBin = std::max(1, analysisStartBin);
+        int searchEndBin = std::min(maxBin - 1, analysisEndBin);
+        if (searchEndBin <= searchStartBin)
+        {
+            searchStartBin = 1;
+            searchEndBin = maxBin - 1;
+        }
+
+        int peakBin = searchStartBin;
+        for (int i = searchStartBin + 1; i <= searchEndBin; ++i)
         {
             if (fftBuf[i] > fftBuf[peakBin])
                 peakBin = i;
@@ -317,15 +345,26 @@ private:
         double logPowerSum = 0.0;
         double powerSum = 0.0;
         double maxPower = 0.0;
+        int nonZeroCount = 0;
         int count = 0;
-        for (int i = 1; i <= maxBin; ++i)
+        for (int i = analysisStartBin; i <= analysisEndBin; ++i)
         {
-            const double p = std::max(static_cast<double>(fftBuf[i]) * static_cast<double>(fftBuf[i]),
-                                      1.0e-20);
-            logPowerSum += std::log(p);
+            const double p = static_cast<double>(fftBuf[i]) * static_cast<double>(fftBuf[i]);
+            if (p > 0.0)
+            {
+                logPowerSum += std::log(p);
+                ++nonZeroCount;
+            }
             powerSum += p;
             maxPower = std::max(maxPower, p);
             ++count;
+        }
+
+        if (count <= 0)
+        {
+            latestFeatures.values[papr] = 0.0f;
+            latestFeatures.values[spectralFlatness] = 0.8f;
+            return;
         }
 
         // Spectral PAPR is peak spectral power divided by average spectral power.
@@ -333,10 +372,16 @@ private:
         const float spectralPapr = static_cast<float>(maxPower / std::max(avgPower, 1.0e-20));
         latestFeatures.values[papr] = 10.0f * std::log10(std::max(spectralPapr, epsilon));
 
-        // Spectral flatness is GM(power spectrum) / AM(power spectrum).
-        const double gm = std::exp(logPowerSum / static_cast<double>(count));
-        const double am = avgPower;
-        const float flatness = static_cast<float>(gm / std::max(am, 1.0e-20));
-        latestFeatures.values[spectralFlatness] = flatness;
+        // Spectral flatness = GM(power spectrum) / AM(power spectrum), in log domain for stability.
+        if (avgPower <= 1.0e-20 || nonZeroCount == 0)
+        {
+            latestFeatures.values[spectralFlatness] = 0.8f;
+        }
+        else
+        {
+            const double gm = std::exp(logPowerSum / static_cast<double>(count));
+            const float flatness = static_cast<float>(gm / avgPower);
+            latestFeatures.values[spectralFlatness] = std::clamp(flatness, 0.0f, 1.0f);
+        }
     }
 };
