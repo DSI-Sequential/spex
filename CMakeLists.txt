@@ -26,6 +26,11 @@ target_compile_definitions(spex PRIVATE
     JUCE_USE_CURL=0
 )
 
+target_compile_options(spex PRIVATE
+    $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:MSVC>>:/O2>
+    $<$<AND:$<CONFIG:Release>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-O2>
+)
+
 target_link_libraries(spex PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp

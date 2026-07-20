@@ -6,7 +6,7 @@
 
 namespace
 {
-constexpr int kFeatureCount = SpectralDisplayComponent::numFeatures;
+constexpr int kFeatureCount = spex::numSpectralFeatures;
 
 const std::array<const char*, kFeatureCount> kFeatureNames
 {
@@ -14,6 +14,7 @@ const std::array<const char*, kFeatureCount> kFeatureNames
     "Sliding RMS",
     "Interpolated Spectral Peak",
     "Spectral PAPR",
+    "Local Spectral Crest",
     "Spectral Flatness"
 };
 
@@ -32,7 +33,8 @@ const std::array<float, kFeatureCount> kSmoothingAlpha
     0.90f,
     0.88f,
     0.85f,
-    0.90f
+    0.85f,
+    0.65f
 };
 
 const std::array<float, kFeatureCount> kHysteresis
@@ -41,7 +43,8 @@ const std::array<float, kFeatureCount> kHysteresis
     0.20f,
     0.20f,
     0.15f,
-    0.004f
+    0.15f,
+    0.0001f
 };
 
 const std::array<juce::Colour, kFeatureCount> kFeatureColours
@@ -50,6 +53,7 @@ const std::array<juce::Colour, kFeatureCount> kFeatureColours
     juce::Colour(0xff22c55e),
     juce::Colour(0xfff59e0b),
     juce::Colour(0xffef4444),
+    juce::Colour(0xffa78bfa),
     juce::Colour(0xffa78bfa)
 };
 
@@ -57,20 +61,24 @@ juce::String csvHeaderName(int featureIndex)
 {
     switch (featureIndex)
     {
-        case SpectralDisplayComponent::windowedPeakAmplitude:    return "windowed_peak_dbfs";
-        case SpectralDisplayComponent::slidingWindowRms:         return "rms_dbfs";
-        case SpectralDisplayComponent::interpolatedSpectralPeak: return "interp_spectral_peak_db";
-        case SpectralDisplayComponent::papr:                     return "spectral_papr_db";
-        case SpectralDisplayComponent::spectralFlatness:         return "spectral_flatness";
+        case spex::windowedPeakAmplitude:    return "windowed_peak_dbfs";
+        case spex::slidingWindowRms:         return "rms_dbfs";
+        case spex::interpolatedSpectralPeak: return "interp_spectral_peak_db";
+        case spex::papr:                     return "spectral_papr_db";
+        case spex::localSpectralCrest:       return "local_spectral_crest_db";
+        case spex::spectralFlatness:         return "spectral_flatness";
         default:                                                 return "feature";
     }
 }
 
 juce::String formatFeatureValueText(int featureIndex, float value)
 {
+    if (!std::isfinite(value))
+        return "nan";
+
     switch (featureIndex)
     {
-        case SpectralDisplayComponent::spectralFlatness:
+        case spex::spectralFlatness:
             return juce::String(value, 4);
         default:
             return juce::String(value, 2) + " dB";
@@ -89,7 +97,7 @@ juce::Range<float> makeAutoscaledRange(int featureIndex,
     const float lo = std::min(minValue, maxValue);
     const float hi = std::max(minValue, maxValue);
     const float span = hi - lo;
-    const float pad = std::max(span * 0.1f, featureIndex == SpectralDisplayComponent::spectralFlatness ? 0.005f : 0.1f);
+    const float pad = std::max(span * 0.1f, featureIndex == spex::spectralFlatness ? 0.005f : 0.1f);
 
     float start = lo - pad;
     float end = hi + pad;
@@ -97,12 +105,12 @@ juce::Range<float> makeAutoscaledRange(int featureIndex,
     if (span < 1.0e-6f)
     {
         const float center = lo;
-        const float halfWidth = featureIndex == SpectralDisplayComponent::spectralFlatness ? 0.02f : 0.5f;
+        const float halfWidth = featureIndex == spex::spectralFlatness ? 0.02f : 0.5f;
         start = center - halfWidth;
         end = center + halfWidth;
     }
 
-    if (featureIndex == SpectralDisplayComponent::spectralFlatness)
+    if (featureIndex == spex::spectralFlatness)
     {
         start = std::max(0.0f, start);
         end = std::min(1.0f, end);
@@ -137,17 +145,29 @@ void drawTrace(juce::Graphics& g,
     const float minV = valueRange.getStart();
     const float maxV = valueRange.getEnd();
     const float xStep = area.getWidth() / static_cast<float>(history.size() - 1);
+    bool started = false;
 
     for (size_t i = 0; i < history.size(); ++i)
     {
+        if (!std::isfinite(history[i]))
+        {
+            started = false;
+            continue;
+        }
+
         const float x = area.getX() + xStep * static_cast<float>(i);
         const float clamped = clampToRange(history[i]);
         const float y = juce::jmap(clamped, minV, maxV, area.getBottom(), area.getY());
 
-        if (i == 0)
+        if (!started)
+        {
             trace.startNewSubPath(x, y);
+            started = true;
+        }
         else
+        {
             trace.lineTo(x, y);
+        }
     }
 
     g.setColour(colour.withAlpha(0.95f));
@@ -256,23 +276,26 @@ MainComponent::MainComponent()
 
     exportCsvButton.setEnabled(false);
 
-    minFeatureFreqLabel.setText("Feature Min Hz", juce::dontSendNotification);
-    minFeatureFreqLabel.setJustificationType(juce::Justification::centredLeft);
-    minFeatureFreqLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
+    featureFreqRangeLabel.setText("Feature Range", juce::dontSendNotification);
+    featureFreqRangeLabel.setJustificationType(juce::Justification::centredLeft);
+    featureFreqRangeLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
 
-    maxFeatureFreqLabel.setText("Feature Max Hz", juce::dontSendNotification);
-    maxFeatureFreqLabel.setJustificationType(juce::Justification::centredLeft);
-    maxFeatureFreqLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
+    featureFreqRangeSlider.setSliderStyle(juce::Slider::TwoValueHorizontal);
+    featureFreqRangeSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    featureFreqRangeSlider.onValueChange = [this] { applyFeatureFrequencyRangeFromUi(); };
 
-    minFeatureFreqSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    minFeatureFreqSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    minFeatureFreqSlider.setSkewFactorFromMidPoint(1000.0);
-    minFeatureFreqSlider.onValueChange = [this] { applyFeatureFrequencyRangeFromUi(); };
+    flatnessPowerFloorLabel.setText("Flatness Floor", juce::dontSendNotification);
+    flatnessPowerFloorLabel.setJustificationType(juce::Justification::centredLeft);
+    flatnessPowerFloorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
 
-    maxFeatureFreqSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    maxFeatureFreqSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    maxFeatureFreqSlider.setSkewFactorFromMidPoint(5000.0);
-    maxFeatureFreqSlider.onValueChange = [this] { applyFeatureFrequencyRangeFromUi(); };
+    flatnessPowerFloorSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    flatnessPowerFloorSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    flatnessPowerFloorSlider.setRange(-180.0, -30.0, 0.1);
+    flatnessPowerFloorSlider.setValue(-120.0, juce::dontSendNotification);
+    flatnessPowerFloorSlider.onValueChange = [this] { applyFlatnessPowerFloorFromUi(); };
+
+    flatnessPowerFloorValueLabel.setJustificationType(juce::Justification::centredRight);
+    flatnessPowerFloorValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
 
     minFeatureFreqValueLabel.setJustificationType(juce::Justification::centredRight);
     minFeatureFreqValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
@@ -283,12 +306,13 @@ MainComponent::MainComponent()
     addAndMakeVisible(featureStackButton);
     addAndMakeVisible(captureButton);
     addAndMakeVisible(exportCsvButton);
-    addAndMakeVisible(minFeatureFreqLabel);
-    addAndMakeVisible(minFeatureFreqSlider);
+    addAndMakeVisible(featureFreqRangeLabel);
+    addAndMakeVisible(featureFreqRangeSlider);
     addAndMakeVisible(minFeatureFreqValueLabel);
-    addAndMakeVisible(maxFeatureFreqLabel);
-    addAndMakeVisible(maxFeatureFreqSlider);
     addAndMakeVisible(maxFeatureFreqValueLabel);
+    addAndMakeVisible(flatnessPowerFloorLabel);
+    addAndMakeVisible(flatnessPowerFloorSlider);
+    addAndMakeVisible(flatnessPowerFloorValueLabel);
     addAndMakeVisible(spectralDisplay);
 
     for (auto& history : featureHistory)
@@ -296,11 +320,12 @@ MainComponent::MainComponent()
 
     resetAutoscaleBounds();
 
-    minFeatureFreqSlider.setRange(0.0, currentNyquistHz, 1.0);
-    maxFeatureFreqSlider.setRange(0.0, currentNyquistHz, 1.0);
-    minFeatureFreqSlider.setValue(0.0, juce::dontSendNotification);
-    maxFeatureFreqSlider.setValue(currentNyquistHz, juce::dontSendNotification);
+    featureFreqRangeSlider.setRange(0.0, currentNyquistHz, 1.0);
+    featureFreqRangeSlider.setMinValue(0.0, juce::dontSendNotification, false);
+    featureFreqRangeSlider.setMaxValue(currentNyquistHz, juce::dontSendNotification, false);
+    featureFreqRangeSlider.setSkewFactorFromMidPoint(std::sqrt(currentNyquistHz));
     applyFeatureFrequencyRangeFromUi();
+    applyFlatnessPowerFloorFromUi();
 
     setSize(1320, 760);
 
@@ -321,19 +346,21 @@ void MainComponent::prepareToPlay(int /*samplesPerBlockExpected*/, double sample
     spectralDisplay.setSampleRate(static_cast<float>(sampleRate));
 
     const float newNyquist = std::max(1.0f, static_cast<float>(sampleRate) * 0.5f);
-    const bool wasFullRange = maxFeatureFreqSlider.getValue() >= (currentNyquistHz - 1.0f);
-    const double previousMin = minFeatureFreqSlider.getValue();
-    const double previousMax = maxFeatureFreqSlider.getValue();
+    const bool wasFullRange = featureFreqRangeSlider.getMaxValue() >= (currentNyquistHz - 1.0f);
+    const double previousMin = featureFreqRangeSlider.getMinValue();
+    const double previousMax = featureFreqRangeSlider.getMaxValue();
 
     currentNyquistHz = newNyquist;
-    minFeatureFreqSlider.setRange(0.0, currentNyquistHz, 1.0);
-    maxFeatureFreqSlider.setRange(0.0, currentNyquistHz, 1.0);
-
-    minFeatureFreqSlider.setValue(std::clamp(previousMin, 0.0, static_cast<double>(currentNyquistHz)), juce::dontSendNotification);
-    maxFeatureFreqSlider.setValue(wasFullRange
-                                      ? static_cast<double>(currentNyquistHz)
-                                      : std::clamp(previousMax, 0.0, static_cast<double>(currentNyquistHz)),
-                                  juce::dontSendNotification);
+    featureFreqRangeSlider.setRange(0.0, currentNyquistHz, 1.0);
+    featureFreqRangeSlider.setMinValue(std::clamp(previousMin, 0.0, static_cast<double>(currentNyquistHz)),
+                                       juce::dontSendNotification,
+                                       false);
+    featureFreqRangeSlider.setMaxValue(wasFullRange
+                                           ? static_cast<double>(currentNyquistHz)
+                                           : std::clamp(previousMax, 0.0, static_cast<double>(currentNyquistHz)),
+                                       juce::dontSendNotification,
+                                       false);
+    featureFreqRangeSlider.setSkewFactorFromMidPoint(std::sqrt(currentNyquistHz));
 
     applyFeatureFrequencyRangeFromUi();
 }
@@ -410,13 +437,18 @@ void MainComponent::resized()
     audioSettingsButton.setBounds(header.removeFromRight(148));
 
     auto rangeRow = bounds.removeFromTop(34);
-    minFeatureFreqLabel.setBounds(rangeRow.removeFromLeft(108));
-    minFeatureFreqSlider.setBounds(rangeRow.removeFromLeft(250));
+    featureFreqRangeLabel.setBounds(rangeRow.removeFromLeft(108));
     minFeatureFreqValueLabel.setBounds(rangeRow.removeFromLeft(72));
     rangeRow.removeFromLeft(12);
-    maxFeatureFreqLabel.setBounds(rangeRow.removeFromLeft(108));
-    maxFeatureFreqSlider.setBounds(rangeRow.removeFromLeft(250));
+    featureFreqRangeSlider.setBounds(rangeRow.removeFromLeft(410));
+    rangeRow.removeFromLeft(12);
     maxFeatureFreqValueLabel.setBounds(rangeRow.removeFromLeft(72));
+
+    auto floorRow = bounds.removeFromTop(34);
+    flatnessPowerFloorLabel.setBounds(floorRow.removeFromLeft(108));
+    flatnessPowerFloorValueLabel.setBounds(floorRow.removeFromLeft(72));
+    floorRow.removeFromLeft(12);
+    flatnessPowerFloorSlider.setBounds(floorRow.removeFromLeft(410));
 
     bounds.removeFromTop(6);
 
@@ -426,22 +458,17 @@ void MainComponent::resized()
 
 void MainComponent::applyFeatureFrequencyRangeFromUi()
 {
-    const float minHz = static_cast<float>(minFeatureFreqSlider.getValue());
-    const float maxHz = static_cast<float>(maxFeatureFreqSlider.getValue());
-
-    if (maxHz < minHz)
-    {
-        maxFeatureFreqSlider.setValue(minHz, juce::dontSendNotification);
-    }
-    else if (minHz > maxHz)
-    {
-        minFeatureFreqSlider.setValue(maxHz, juce::dontSendNotification);
-    }
-
-    const float appliedMin = static_cast<float>(minFeatureFreqSlider.getValue());
-    const float appliedMax = static_cast<float>(maxFeatureFreqSlider.getValue());
+    const float appliedMin = static_cast<float>(featureFreqRangeSlider.getMinValue());
+    const float appliedMax = static_cast<float>(featureFreqRangeSlider.getMaxValue());
     spectralDisplay.setFeatureFrequencyRange(appliedMin, appliedMax);
     updateFrequencyRangeLabels();
+}
+
+void MainComponent::applyFlatnessPowerFloorFromUi()
+{
+    const float floorDb = static_cast<float>(flatnessPowerFloorSlider.getValue());
+    spectralDisplay.setFlatnessPowerFloorDb(floorDb);
+    updateFlatnessPowerFloorLabel();
 }
 
 void MainComponent::updateFrequencyRangeLabels()
@@ -453,10 +480,16 @@ void MainComponent::updateFrequencyRangeLabels()
         return juce::String(hz, 0) + " Hz";
     };
 
-    minFeatureFreqValueLabel.setText(formatHz(static_cast<float>(minFeatureFreqSlider.getValue())),
+    minFeatureFreqValueLabel.setText(formatHz(static_cast<float>(featureFreqRangeSlider.getMinValue())),
                                      juce::dontSendNotification);
-    maxFeatureFreqValueLabel.setText(formatHz(static_cast<float>(maxFeatureFreqSlider.getValue())),
+    maxFeatureFreqValueLabel.setText(formatHz(static_cast<float>(featureFreqRangeSlider.getMaxValue())),
                                      juce::dontSendNotification);
+}
+
+void MainComponent::updateFlatnessPowerFloorLabel()
+{
+    flatnessPowerFloorValueLabel.setText(juce::String(static_cast<float>(flatnessPowerFloorSlider.getValue()), 1) + " dB",
+                                         juce::dontSendNotification);
 }
 
 void MainComponent::openAudioSettings()
@@ -579,7 +612,13 @@ void MainComponent::exportCaptureCsv()
             line << juce::String(row.timeSeconds, 6);
 
             for (int i = 0; i < featureCount; ++i)
-                line << "," << juce::String(row.values[static_cast<size_t>(i)], 6);
+            {
+                const float value = row.values[static_cast<size_t>(i)];
+                if (std::isfinite(value))
+                    line << "," << juce::String(value, 6);
+                else
+                    line << ",nan";
+            }
 
             lines.add(line);
         }
@@ -595,12 +634,24 @@ void MainComponent::exportCaptureCsv()
     });
 }
 
-void MainComponent::updateFeatureState(const SpectralDisplayComponent::FeatureSnapshot& snapshot)
+void MainComponent::updateFeatureState(const spex::SpectralFeatureSnapshot& snapshot)
 {
     for (int i = 0; i < featureCount; ++i)
     {
         const size_t index = static_cast<size_t>(i);
         const float raw = snapshot.values[index];
+
+        if (!std::isfinite(raw))
+        {
+            displayedValues[index] = raw;
+            auto& history = featureHistory[index];
+            history.push_back(raw);
+
+            if (history.size() > static_cast<size_t>(featureHistoryLength))
+                history.erase(history.begin(), history.begin() + static_cast<std::ptrdiff_t>(history.size() - featureHistoryLength));
+
+            continue;
+        }
 
         if (!hasDisplayedValues[index])
         {

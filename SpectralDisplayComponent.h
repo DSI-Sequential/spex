@@ -5,6 +5,8 @@
 #include <array>
 #include <atomic>
 
+#include "SpectralFeatureAnalyzer.h"
+
 // ---------------------------------------------------------------------------
 // SpectralDisplayComponent
 // Top 2/3: waterfall (newest row at bottom, oldest at top, log-freq X).
@@ -15,18 +17,16 @@ class SpectralDisplayComponent final : public juce::Component
 public:
     enum FeatureIndex
     {
-        windowedPeakAmplitude = 0,
-        slidingWindowRms,
-        interpolatedSpectralPeak,
-        papr,
-        spectralFlatness,
-        numFeatures
+        windowedPeakAmplitude = spex::windowedPeakAmplitude,
+        slidingWindowRms = spex::slidingWindowRms,
+        interpolatedSpectralPeak = spex::interpolatedSpectralPeak,
+        papr = spex::papr,
+        localSpectralCrest = spex::localSpectralCrest,
+        spectralFlatness = spex::spectralFlatness,
+        numFeatures = spex::numSpectralFeatures
     };
 
-    struct FeatureSnapshot
-    {
-        std::array<float, numFeatures> values {};
-    };
+    using FeatureSnapshot = spex::SpectralFeatureSnapshot;
 
     static constexpr int   fftOrder = 14;
     static constexpr int   fftSize  = 1 << fftOrder;
@@ -46,10 +46,13 @@ public:
     void setSampleRate(float sr) { sampleRate = sr; }
     void setFeatureFrequencyRange(float minHz, float maxHz)
     {
-        featureMinHz = std::max(0.0f, minHz);
-        featureMaxHz = std::max(0.0f, maxHz);
+        featureAnalyzer.setFeatureFrequencyRange(minHz, maxHz);
     }
-    FeatureSnapshot getLatestFeatureSnapshot() const { return latestFeatures; }
+    void setFlatnessPowerFloorDb(float floorDb)
+    {
+        featureAnalyzer.setFlatnessPowerFloorDb(floorDb);
+    }
+    FeatureSnapshot getLatestFeatureSnapshot() const { return featureAnalyzer.getLatestSnapshot(); }
 
     // Audio thread: push samples into the ring buffer.
     void pushSamples(const float* data, int n)
@@ -85,7 +88,7 @@ public:
         // FFT → magnitudes in fftBuf[0..fftSize/2].
         fft.performFrequencyOnlyForwardTransform(fftBuf.data());
 
-        computeFeatures(peakAbs, sumSquares);
+        featureAnalyzer.analyze(fftBuf.data(), fftSize / 2 + 1, sampleRate, fftSize, peakAbs, sumSquares);
 
         // Normalise and smooth.
         const float normDb = juce::Decibels::gainToDecibels(static_cast<float>(fftSize));
@@ -279,109 +282,13 @@ private:
     std::array<float, fftSize * 2>     fftBuf  {};
     std::array<float, fftSize>         hannWin {};
     std::array<float, fftSize / 2 + 1> mag     {};
+    spex::SpectralFeatureAnalyzer<fftSize / 2 + 1> featureAnalyzer;
 
     std::atomic<int>  wPos   { 0 };
     std::atomic<bool> hasNew { false };
 
     float sampleRate { 44100.0f };
-    FeatureSnapshot latestFeatures {};
-    float featureMinHz { 0.0f };
-    float featureMaxHz { 0.0f };
 
     juce::Image wfImg;
     int wfRow { 0 };
-
-    void computeFeatures(float peakAbs, double sumSquares)
-    {
-        constexpr float epsilon = 1.0e-12f;
-        const float meanPower = static_cast<float>(sumSquares / static_cast<double>(fftSize));
-        const float rms = std::sqrt(std::max(meanPower, epsilon));
-        const float safePeak = std::max(peakAbs, epsilon);
-
-        latestFeatures.values[windowedPeakAmplitude] =
-            juce::Decibels::gainToDecibels(safePeak, floorDb);
-        latestFeatures.values[slidingWindowRms] =
-            juce::Decibels::gainToDecibels(rms, floorDb);
-
-        const int maxBin = fftSize / 2;
-        const float nyquist = sampleRate * 0.5f;
-        const float minHz = std::clamp(featureMinHz, 0.0f, nyquist);
-        const float maxHz = (featureMaxHz <= 0.0f)
-            ? nyquist
-            : std::clamp(featureMaxHz, minHz, nyquist);
-
-        int analysisStartBin = static_cast<int>(std::ceil(minHz * static_cast<float>(fftSize) / sampleRate));
-        int analysisEndBin = static_cast<int>(std::floor(maxHz * static_cast<float>(fftSize) / sampleRate));
-        analysisStartBin = std::clamp(analysisStartBin, 0, maxBin);
-        analysisEndBin = std::clamp(analysisEndBin, 0, maxBin);
-        if (analysisEndBin < analysisStartBin)
-            std::swap(analysisStartBin, analysisEndBin);
-
-        int searchStartBin = std::max(1, analysisStartBin);
-        int searchEndBin = std::min(maxBin - 1, analysisEndBin);
-        if (searchEndBin <= searchStartBin)
-        {
-            searchStartBin = 1;
-            searchEndBin = maxBin - 1;
-        }
-
-        int peakBin = searchStartBin;
-        for (int i = searchStartBin + 1; i <= searchEndBin; ++i)
-        {
-            if (fftBuf[i] > fftBuf[peakBin])
-                peakBin = i;
-        }
-
-        const float l = std::log(std::max(fftBuf[peakBin - 1], epsilon));
-        const float c = std::log(std::max(fftBuf[peakBin], epsilon));
-        const float r = std::log(std::max(fftBuf[peakBin + 1], epsilon));
-        const float denom = (l - 2.0f * c + r);
-        const float delta = std::abs(denom) > epsilon ? 0.5f * (l - r) / denom : 0.0f;
-        const float interpLogMag = c - 0.25f * (l - r) * delta;
-        const float interpMag = std::exp(interpLogMag);
-        latestFeatures.values[interpolatedSpectralPeak] =
-            juce::Decibels::gainToDecibels(interpMag, floorDb);
-
-        double logPowerSum = 0.0;
-        double powerSum = 0.0;
-        double maxPower = 0.0;
-        int nonZeroCount = 0;
-        int count = 0;
-        for (int i = analysisStartBin; i <= analysisEndBin; ++i)
-        {
-            const double p = static_cast<double>(fftBuf[i]) * static_cast<double>(fftBuf[i]);
-            if (p > 0.0)
-            {
-                logPowerSum += std::log(p);
-                ++nonZeroCount;
-            }
-            powerSum += p;
-            maxPower = std::max(maxPower, p);
-            ++count;
-        }
-
-        if (count <= 0)
-        {
-            latestFeatures.values[papr] = 0.0f;
-            latestFeatures.values[spectralFlatness] = 0.8f;
-            return;
-        }
-
-        // Spectral PAPR is peak spectral power divided by average spectral power.
-        const double avgPower = powerSum / static_cast<double>(count);
-        const float spectralPapr = static_cast<float>(maxPower / std::max(avgPower, 1.0e-20));
-        latestFeatures.values[papr] = 10.0f * std::log10(std::max(spectralPapr, epsilon));
-
-        // Spectral flatness = GM(power spectrum) / AM(power spectrum), in log domain for stability.
-        if (avgPower <= 1.0e-20 || nonZeroCount == 0)
-        {
-            latestFeatures.values[spectralFlatness] = 0.8f;
-        }
-        else
-        {
-            const double gm = std::exp(logPowerSum / static_cast<double>(count));
-            const float flatness = static_cast<float>(gm / avgPower);
-            latestFeatures.values[spectralFlatness] = std::clamp(flatness, 0.0f, 1.0f);
-        }
-    }
 };

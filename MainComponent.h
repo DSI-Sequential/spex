@@ -6,6 +6,8 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
+
+#include "SpectralFeatureAnalyzer.h"
 #include "SpectralDisplayComponent.h"
 
 class MainComponent final : public juce::AudioAppComponent,
@@ -23,7 +25,7 @@ public:
     void resized() override;
 
 private:
-    static constexpr int featureCount = SpectralDisplayComponent::numFeatures;
+    static constexpr int featureCount = spex::numSpectralFeatures;
     static constexpr int featureHistoryLength = 420;
 
     struct CaptureRow
@@ -37,8 +39,10 @@ private:
     void toggleCapture();
     void exportCaptureCsv();
     void applyFeatureFrequencyRangeFromUi();
+    void applyFlatnessPowerFloorFromUi();
     void updateFrequencyRangeLabels();
-    void updateFeatureState(const SpectralDisplayComponent::FeatureSnapshot& snapshot);
+    void updateFlatnessPowerFloorLabel();
+    void updateFeatureState(const spex::SpectralFeatureSnapshot& snapshot);
     void resetAutoscaleBounds();
     juce::String formatFeatureValue(int featureIndex, float value) const;
     void paintFeaturePanel(juce::Graphics& g, juce::Rectangle<int> bounds) const;
@@ -48,12 +52,13 @@ private:
     juce::TextButton          featureStackButton  { "Feature Stack" };
     juce::TextButton          captureButton       { "Start Capture" };
     juce::TextButton          exportCsvButton     { "Export CSV" };
-    juce::Label               minFeatureFreqLabel;
-    juce::Slider              minFeatureFreqSlider;
+    juce::Label               featureFreqRangeLabel;
+    juce::Slider              featureFreqRangeSlider;
     juce::Label               minFeatureFreqValueLabel;
-    juce::Label               maxFeatureFreqLabel;
-    juce::Slider              maxFeatureFreqSlider;
     juce::Label               maxFeatureFreqValueLabel;
+    juce::Label               flatnessPowerFloorLabel;
+    juce::Slider              flatnessPowerFloorSlider;
+    juce::Label               flatnessPowerFloorValueLabel;
 
     SpectralDisplayComponent spectralDisplay;
     std::vector<float>       monoScratch;
