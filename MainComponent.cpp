@@ -271,6 +271,7 @@ MainComponent::MainComponent()
 {
     audioSettingsButton.onClick = [this] { openAudioSettings(); };
     featureStackButton.onClick = [this] { openFeatureStackWindow(); };
+    pauseButton.onClick = [this] { toggleScrollingPause(); };
     captureButton.onClick = [this] { toggleCapture(); };
     exportCsvButton.onClick = [this] { exportCaptureCsv(); };
 
@@ -297,6 +298,25 @@ MainComponent::MainComponent()
     flatnessPowerFloorValueLabel.setJustificationType(juce::Justification::centredRight);
     flatnessPowerFloorValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
 
+    gainLabel.setText("Pre-gain", juce::dontSendNotification);
+    gainLabel.setJustificationType(juce::Justification::centredLeft);
+    gainLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
+
+    gainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    gainSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    gainSlider.setRange(-12.0, 12.0, 0.1);
+    gainSlider.setValue(0.0, juce::dontSendNotification);
+    gainSlider.onValueChange = [this]
+    {
+        preAnalysisGainLinear.store(
+            juce::Decibels::decibelsToGain(static_cast<float>(gainSlider.getValue())),
+            std::memory_order_relaxed);
+        updateGainLabel();
+    };
+
+    gainValueLabel.setJustificationType(juce::Justification::centredRight);
+    gainValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
+
     minFeatureFreqValueLabel.setJustificationType(juce::Justification::centredRight);
     minFeatureFreqValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
     maxFeatureFreqValueLabel.setJustificationType(juce::Justification::centredRight);
@@ -304,6 +324,7 @@ MainComponent::MainComponent()
 
     addAndMakeVisible(audioSettingsButton);
     addAndMakeVisible(featureStackButton);
+    addAndMakeVisible(pauseButton);
     addAndMakeVisible(captureButton);
     addAndMakeVisible(exportCsvButton);
     addAndMakeVisible(featureFreqRangeLabel);
@@ -313,6 +334,9 @@ MainComponent::MainComponent()
     addAndMakeVisible(flatnessPowerFloorLabel);
     addAndMakeVisible(flatnessPowerFloorSlider);
     addAndMakeVisible(flatnessPowerFloorValueLabel);
+    addAndMakeVisible(gainLabel);
+    addAndMakeVisible(gainSlider);
+    addAndMakeVisible(gainValueLabel);
     addAndMakeVisible(spectralDisplay);
 
     for (auto& history : featureHistory)
@@ -326,6 +350,7 @@ MainComponent::MainComponent()
     featureFreqRangeSlider.setSkewFactorFromMidPoint(std::sqrt(currentNyquistHz));
     applyFeatureFrequencyRangeFromUi();
     applyFlatnessPowerFloorFromUi();
+    updateGainLabel();
 
     setSize(1320, 760);
 
@@ -396,6 +421,13 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                 monoScratch[static_cast<size_t>(i)] *= scale;
         }
 
+        const float gain = preAnalysisGainLinear.load(std::memory_order_relaxed);
+        if (gain != 1.0f)
+        {
+            for (int i = 0; i < numSamples; ++i)
+                monoScratch[static_cast<size_t>(i)] *= gain;
+        }
+
         spectralDisplay.pushSamples(monoScratch.data(), numSamples);
     }
 
@@ -432,6 +464,8 @@ void MainComponent::resized()
     header.removeFromRight(8);
     captureButton.setBounds(header.removeFromRight(124));
     header.removeFromRight(8);
+    pauseButton.setBounds(header.removeFromRight(88));
+    header.removeFromRight(8);
     featureStackButton.setBounds(header.removeFromRight(132));
     header.removeFromRight(8);
     audioSettingsButton.setBounds(header.removeFromRight(148));
@@ -449,6 +483,12 @@ void MainComponent::resized()
     flatnessPowerFloorValueLabel.setBounds(floorRow.removeFromLeft(72));
     floorRow.removeFromLeft(12);
     flatnessPowerFloorSlider.setBounds(floorRow.removeFromLeft(410));
+
+    auto gainRow = bounds.removeFromTop(34);
+    gainLabel.setBounds(gainRow.removeFromLeft(108));
+    gainValueLabel.setBounds(gainRow.removeFromLeft(72));
+    gainRow.removeFromLeft(12);
+    gainSlider.setBounds(gainRow.removeFromLeft(410));
 
     bounds.removeFromTop(6);
 
@@ -745,34 +785,51 @@ void MainComponent::paintFeaturePanel(juce::Graphics& g, juce::Rectangle<int> bo
     }
 }
 
+void MainComponent::toggleScrollingPause()
+{
+    scrollingPaused = !scrollingPaused;
+    spectralDisplay.setScrollingPaused(scrollingPaused);
+    pauseButton.setButtonText(scrollingPaused ? "Resume" : "Pause");
+}
+
+void MainComponent::updateGainLabel()
+{
+    const float db = static_cast<float>(gainSlider.getValue());
+    const juce::String text = (db >= 0.0f ? "+" : "") + juce::String(db, 1) + " dB";
+    gainValueLabel.setText(text, juce::dontSendNotification);
+}
+
 void MainComponent::timerCallback()
 {
     if (!spectralDisplay.update())
         return;
 
-    const auto snapshot = spectralDisplay.getLatestFeatureSnapshot();
-    updateFeatureState(snapshot);
-
-    if (captureEnabled)
+    if (!scrollingPaused)
     {
-        CaptureRow row;
-        row.timeSeconds = (juce::Time::getMillisecondCounterHiRes() - captureStartMs) * 0.001;
-        row.values = displayedValues;
-        captureRows.push_back(row);
+        const auto snapshot = spectralDisplay.getLatestFeatureSnapshot();
+        updateFeatureState(snapshot);
+
+        if (captureEnabled)
+        {
+            CaptureRow row;
+            row.timeSeconds = (juce::Time::getMillisecondCounterHiRes() - captureStartMs) * 0.001;
+            row.values = displayedValues;
+            captureRows.push_back(row);
+        }
+
+        if (!captureEnabled)
+            exportCsvButton.setEnabled(!captureRows.empty());
+
+        if (featureStackContent != nullptr)
+        {
+            static_cast<FeatureStackContent*>(featureStackContent)->setData(featureHistory,
+                                                                           displayedValues,
+                                                                           runningMinValues,
+                                                                           runningMaxValues,
+                                                                           hasAutoscaleBounds);
+            featureStackContent->repaint();
+        }
+
+        repaint();
     }
-
-    if (!captureEnabled)
-        exportCsvButton.setEnabled(!captureRows.empty());
-
-    if (featureStackContent != nullptr)
-    {
-        static_cast<FeatureStackContent*>(featureStackContent)->setData(featureHistory,
-                                                                       displayedValues,
-                                                                       runningMinValues,
-                                                                       runningMaxValues,
-                                                                       hasAutoscaleBounds);
-        featureStackContent->repaint();
-    }
-
-    repaint();
 }

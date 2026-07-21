@@ -38,10 +38,12 @@ private:
     void openFeatureStackWindow();
     void toggleCapture();
     void exportCaptureCsv();
+    void toggleScrollingPause();
     void applyFeatureFrequencyRangeFromUi();
     void applyFlatnessPowerFloorFromUi();
     void updateFrequencyRangeLabels();
     void updateFlatnessPowerFloorLabel();
+    void updateGainLabel();
     void updateFeatureState(const spex::SpectralFeatureSnapshot& snapshot);
     void resetAutoscaleBounds();
     juce::String formatFeatureValue(int featureIndex, float value) const;
@@ -50,6 +52,7 @@ private:
 
     juce::TextButton          audioSettingsButton { "Audio Settings" };
     juce::TextButton          featureStackButton  { "Feature Stack" };
+    juce::TextButton          pauseButton         { "Pause" };
     juce::TextButton          captureButton       { "Start Capture" };
     juce::TextButton          exportCsvButton     { "Export CSV" };
     juce::Label               featureFreqRangeLabel;
@@ -59,6 +62,9 @@ private:
     juce::Label               flatnessPowerFloorLabel;
     juce::Slider              flatnessPowerFloorSlider;
     juce::Label               flatnessPowerFloorValueLabel;
+    juce::Label               gainLabel;
+    juce::Slider              gainSlider;
+    juce::Label               gainValueLabel;
 
     SpectralDisplayComponent spectralDisplay;
     std::vector<float>       monoScratch;
@@ -74,8 +80,11 @@ private:
     std::array<bool, featureCount> hasAutoscaleBounds {};
 
     bool captureEnabled { false };
+    bool scrollingPaused { false };
     double captureStartMs { 0.0 };
     std::vector<CaptureRow> captureRows;
+
+    std::atomic<float>      preAnalysisGainLinear { 1.0f };
 
     std::unique_ptr<juce::DialogWindow> audioSettingsWindow;
     std::unique_ptr<juce::DocumentWindow> featureStackWindow;

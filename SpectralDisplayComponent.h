@@ -44,6 +44,7 @@ public:
     }
 
     void setSampleRate(float sr) { sampleRate = sr; }
+    void setScrollingPaused(bool paused) { scrollingPaused = paused; }
     void setFeatureFrequencyRange(float minHz, float maxHz)
     {
         featureAnalyzer.setFeatureFrequencyRange(minHz, maxHz);
@@ -101,7 +102,7 @@ public:
             mag[i] = alpha * mag[i] + (1.0f - alpha) * std::max(db, floorDb);
         }
 
-        pushWaterfallRow();
+        if (!scrollingPaused) pushWaterfallRow();
         repaint();
         return true;
     }
@@ -288,6 +289,7 @@ private:
     std::atomic<bool> hasNew { false };
 
     float sampleRate { 44100.0f };
+    bool  scrollingPaused { false };
 
     juce::Image wfImg;
     int wfRow { 0 };
