@@ -298,6 +298,46 @@ MainComponent::MainComponent()
     flatnessPowerFloorValueLabel.setJustificationType(juce::Justification::centredRight);
     flatnessPowerFloorValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
 
+    slopeRegionLabel.setText("Slope Region", juce::dontSendNotification);
+    slopeRegionLabel.setJustificationType(juce::Justification::centredLeft);
+    slopeRegionLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
+
+    slopeRegionSlider.setSliderStyle(juce::Slider::TwoValueHorizontal);
+    slopeRegionSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    slopeRegionSlider.onValueChange = [this] { applySlopeRegionFromUi(); };
+
+    minSlopeFreqValueLabel.setJustificationType(juce::Justification::centredRight);
+    minSlopeFreqValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
+    maxSlopeFreqValueLabel.setJustificationType(juce::Justification::centredRight);
+    maxSlopeFreqValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
+
+    captureReferenceButton.onClick = [this] { captureSlopeReference(); };
+    clearReferenceButton.onClick = [this] { clearSlopeReference(); };
+    clearReferenceButton.setEnabled(false);
+
+    slopeReadoutLabel.setJustificationType(juce::Justification::centredLeft);
+    slopeReadoutLabel.setColour(juce::Label::textColourId, juce::Colour(0xfffde68a));
+    slopeReadoutLabel.setFont(juce::Font(14.0f, juce::Font::bold));
+
+    loadTargetButton.onClick = [this] { loadTargetAudio(); };
+
+    manualTargetToggle.setButtonText("Manual dB/oct");
+    manualTargetToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
+    manualTargetToggle.onClick = [this] { applyManualTargetFromUi(); };
+
+    targetSlopeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    targetSlopeSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    targetSlopeSlider.setRange(-24.0, 0.0, 0.01);
+    targetSlopeSlider.setValue(-6.97, juce::dontSendNotification);
+    targetSlopeSlider.onValueChange = [this] { applyManualTargetFromUi(); };
+
+    targetSlopeValueLabel.setJustificationType(juce::Justification::centredRight);
+    targetSlopeValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xfff9a8d4));
+
+    cubicFitToggle.setButtonText("Cubic fit");
+    cubicFitToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
+    cubicFitToggle.onClick = [this] { applyCubicFitFromUi(); };
+
     gainLabel.setText("Pre-gain", juce::dontSendNotification);
     gainLabel.setJustificationType(juce::Justification::centredLeft);
     gainLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
@@ -334,6 +374,18 @@ MainComponent::MainComponent()
     addAndMakeVisible(flatnessPowerFloorLabel);
     addAndMakeVisible(flatnessPowerFloorSlider);
     addAndMakeVisible(flatnessPowerFloorValueLabel);
+    addAndMakeVisible(slopeRegionLabel);
+    addAndMakeVisible(slopeRegionSlider);
+    addAndMakeVisible(minSlopeFreqValueLabel);
+    addAndMakeVisible(maxSlopeFreqValueLabel);
+    addAndMakeVisible(captureReferenceButton);
+    addAndMakeVisible(clearReferenceButton);
+    addAndMakeVisible(loadTargetButton);
+    addAndMakeVisible(manualTargetToggle);
+    addAndMakeVisible(targetSlopeSlider);
+    addAndMakeVisible(targetSlopeValueLabel);
+    addAndMakeVisible(cubicFitToggle);
+    addAndMakeVisible(slopeReadoutLabel);
     addAndMakeVisible(gainLabel);
     addAndMakeVisible(gainSlider);
     addAndMakeVisible(gainValueLabel);
@@ -352,7 +404,17 @@ MainComponent::MainComponent()
     applyFlatnessPowerFloorFromUi();
     updateGainLabel();
 
-    setSize(1320, 760);
+    slopeRegionSlider.setRange(0.0, currentNyquistHz, 1.0);
+    slopeRegionSlider.setMinValue(std::min(3000.0, static_cast<double>(currentNyquistHz)), juce::dontSendNotification, false);
+    slopeRegionSlider.setMaxValue(std::min(20000.0, static_cast<double>(currentNyquistHz)), juce::dontSendNotification, false);
+    slopeRegionSlider.setSkewFactorFromMidPoint(std::sqrt(currentNyquistHz));
+    applySlopeRegionFromUi();
+    updateSlopeReadout();
+
+    applyManualTargetFromUi();
+    applyCubicFitFromUi();
+
+    setSize(1320, 800);
 
     // 2 input channels (analysis source), 2 output channels (kept silent).
     setAudioChannels(2, 2);
@@ -387,7 +449,17 @@ void MainComponent::prepareToPlay(int /*samplesPerBlockExpected*/, double sample
                                        false);
     featureFreqRangeSlider.setSkewFactorFromMidPoint(std::sqrt(currentNyquistHz));
 
+    const double previousSlopeMin = slopeRegionSlider.getMinValue();
+    const double previousSlopeMax = slopeRegionSlider.getMaxValue();
+    slopeRegionSlider.setRange(0.0, currentNyquistHz, 1.0);
+    slopeRegionSlider.setMinValue(std::clamp(previousSlopeMin, 0.0, static_cast<double>(currentNyquistHz)),
+                                  juce::dontSendNotification, false);
+    slopeRegionSlider.setMaxValue(std::clamp(previousSlopeMax, 0.0, static_cast<double>(currentNyquistHz)),
+                                  juce::dontSendNotification, false);
+    slopeRegionSlider.setSkewFactorFromMidPoint(std::sqrt(currentNyquistHz));
+
     applyFeatureFrequencyRangeFromUi();
+    applySlopeRegionFromUi();
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -490,6 +562,32 @@ void MainComponent::resized()
     gainRow.removeFromLeft(12);
     gainSlider.setBounds(gainRow.removeFromLeft(410));
 
+    auto slopeRow = bounds.removeFromTop(34);
+    slopeRegionLabel.setBounds(slopeRow.removeFromLeft(108));
+    minSlopeFreqValueLabel.setBounds(slopeRow.removeFromLeft(72));
+    slopeRow.removeFromLeft(12);
+    slopeRegionSlider.setBounds(slopeRow.removeFromLeft(410));
+    slopeRow.removeFromLeft(12);
+    maxSlopeFreqValueLabel.setBounds(slopeRow.removeFromLeft(72));
+    slopeRow.removeFromLeft(16);
+    captureReferenceButton.setBounds(slopeRow.removeFromLeft(112));
+    slopeRow.removeFromLeft(8);
+    clearReferenceButton.setBounds(slopeRow.removeFromLeft(112));
+
+    auto targetRow = bounds.removeFromTop(34);
+    loadTargetButton.setBounds(targetRow.removeFromLeft(150));
+    targetRow.removeFromLeft(16);
+    manualTargetToggle.setBounds(targetRow.removeFromLeft(130));
+    targetRow.removeFromLeft(4);
+    targetSlopeSlider.setBounds(targetRow.removeFromLeft(240));
+    targetRow.removeFromLeft(8);
+    targetSlopeValueLabel.setBounds(targetRow.removeFromLeft(96));
+    targetRow.removeFromLeft(16);
+    cubicFitToggle.setBounds(targetRow.removeFromLeft(110));
+
+    auto readoutRow = bounds.removeFromTop(26);
+    slopeReadoutLabel.setBounds(readoutRow.reduced(4, 0));
+
     bounds.removeFromTop(6);
 
     featurePanelBounds = bounds.removeFromRight(360);
@@ -509,6 +607,165 @@ void MainComponent::applyFlatnessPowerFloorFromUi()
     const float floorDb = static_cast<float>(flatnessPowerFloorSlider.getValue());
     spectralDisplay.setFlatnessPowerFloorDb(floorDb);
     updateFlatnessPowerFloorLabel();
+}
+
+void MainComponent::applySlopeRegionFromUi()
+{
+    const float minHz = static_cast<float>(slopeRegionSlider.getMinValue());
+    const float maxHz = static_cast<float>(slopeRegionSlider.getMaxValue());
+    spectralDisplay.setSlopeRegion(minHz, maxHz);
+    updateSlopeRegionLabels();
+}
+
+void MainComponent::captureSlopeReference()
+{
+    spectralDisplay.captureReference();
+    clearReferenceButton.setEnabled(true);
+    updateSlopeReadout();
+}
+
+void MainComponent::clearSlopeReference()
+{
+    spectralDisplay.clearReference();
+    clearReferenceButton.setEnabled(false);
+    updateSlopeReadout();
+}
+
+void MainComponent::loadTargetAudio()
+{
+    importChooser = std::make_unique<juce::FileChooser>("Select target audio file",
+                                                        juce::File::getSpecialLocation(juce::File::userMusicDirectory),
+                                                        "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+
+    const int flags = juce::FileBrowserComponent::openMode
+                    | juce::FileBrowserComponent::canSelectFiles;
+
+    importChooser->launchAsync(flags, [this](const juce::FileChooser& chooser)
+    {
+        const auto file = chooser.getResult();
+        if (file != juce::File())
+        {
+            if (spectralDisplay.analyzeReferenceFile(file))
+            {
+                clearReferenceButton.setEnabled(true);
+                updateSlopeReadout();
+            }
+            else
+            {
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                       "Load Target Audio",
+                                                       "Could not read or analyse the selected audio file.");
+            }
+        }
+
+        importChooser.reset();
+    });
+}
+
+void MainComponent::applyManualTargetFromUi()
+{
+    const bool enabled = manualTargetToggle.getToggleState();
+    const float slope = static_cast<float>(targetSlopeSlider.getValue());
+    targetSlopeSlider.setEnabled(enabled);
+    spectralDisplay.setManualTarget(enabled, slope);
+    updateManualTargetLabel();
+    updateSlopeReadout();
+}
+
+void MainComponent::applyCubicFitFromUi()
+{
+    spectralDisplay.setShowPolynomialFit(cubicFitToggle.getToggleState());
+    updateSlopeReadout();
+}
+
+void MainComponent::updateManualTargetLabel()
+{
+    targetSlopeValueLabel.setText(juce::String(static_cast<float>(targetSlopeSlider.getValue()), 2) + " dB/oct",
+                                  juce::dontSendNotification);
+}
+
+void MainComponent::updateSlopeRegionLabels()
+{
+    const auto formatHz = [](float hz) -> juce::String
+    {
+        if (hz >= 1000.0f)
+            return juce::String(hz / 1000.0f, 2) + " kHz";
+        return juce::String(hz, 0) + " Hz";
+    };
+
+    minSlopeFreqValueLabel.setText(formatHz(static_cast<float>(slopeRegionSlider.getMinValue())),
+                                   juce::dontSendNotification);
+    maxSlopeFreqValueLabel.setText(formatHz(static_cast<float>(slopeRegionSlider.getMaxValue())),
+                                   juce::dontSendNotification);
+}
+
+void MainComponent::updateSlopeReadout()
+{
+    const auto live = spectralDisplay.getLiveSlopeFit();
+
+    const juce::String superTwo = juce::String::charToString(static_cast<juce::juce_wchar>(0x00b2));
+    const juce::String deltaSym = juce::String::charToString(static_cast<juce::juce_wchar>(0x0394));
+    const juce::String checkSym = juce::String::charToString(static_cast<juce::juce_wchar>(0x2713));
+
+    juce::String text;
+    if (live.valid)
+        text << "Live " << juce::String(live.slopeDbPerOct, 2) << " dB/oct"
+             << "  (R" << superTwo << " " << juce::String(live.rSquared, 2) << ")";
+    else
+        text << "Live --";
+
+    if (cubicFitToggle.getToggleState())
+    {
+        const auto livePoly = spectralDisplay.getLivePolyFit();
+        if (livePoly.valid)
+        {
+            const float sLo = SpectralDisplayComponent::polyLocalSlopeDbPerOct(livePoly, livePoly.minHz);
+            const float sHi = SpectralDisplayComponent::polyLocalSlopeDbPerOct(livePoly, livePoly.maxHz);
+            const auto kHz = [](float hz) { return juce::String(hz / 1000.0f, 1) + "k"; };
+            text << "  [cubic R" << superTwo << " " << juce::String(livePoly.rSquared, 2)
+                 << ": " << kHz(livePoly.minHz) << " " << juce::String(sLo, 1)
+                 << " -> " << kHz(livePoly.maxHz) << " " << juce::String(sHi, 1) << " dB/oct]";
+        }
+    }
+
+    // Target precedence: manual numeric target overrides a captured/imported one.
+    bool haveTarget = false;
+    float targetSlope = 0.0f;
+    juce::String targetSource;
+
+    if (spectralDisplay.isManualTargetEnabled())
+    {
+        haveTarget = true;
+        targetSlope = spectralDisplay.getManualTargetSlope();
+        targetSource = "manual";
+    }
+    else if (spectralDisplay.hasReference())
+    {
+        const auto ref = spectralDisplay.getReferenceSlopeFit();
+        if (ref.valid)
+        {
+            haveTarget = true;
+            targetSlope = ref.slopeDbPerOct;
+            targetSource = spectralDisplay.getReferenceName();
+        }
+    }
+
+    if (haveTarget)
+    {
+        text << "   |   Target " << juce::String(targetSlope, 2) << " dB/oct";
+        if (targetSource.isNotEmpty())
+            text << " (" << targetSource << ")";
+        if (live.valid)
+        {
+            const float delta = live.slopeDbPerOct - targetSlope;
+            text << "   |   " << deltaSym << " " << (delta >= 0.0f ? "+" : "")
+                 << juce::String(delta, 2) << " dB/oct";
+            if (std::abs(delta) <= 0.25f)
+                text << "  " << checkSym << " matched";
+        }
+    }
+
+    slopeReadoutLabel.setText(text, juce::dontSendNotification);
 }
 
 void MainComponent::updateFrequencyRangeLabels()
@@ -808,6 +1065,8 @@ void MainComponent::timerCallback()
     {
         const auto snapshot = spectralDisplay.getLatestFeatureSnapshot();
         updateFeatureState(snapshot);
+
+        updateSlopeReadout();
 
         if (captureEnabled)
         {

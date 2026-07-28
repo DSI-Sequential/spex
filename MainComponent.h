@@ -41,8 +41,17 @@ private:
     void toggleScrollingPause();
     void applyFeatureFrequencyRangeFromUi();
     void applyFlatnessPowerFloorFromUi();
+    void applySlopeRegionFromUi();
+    void captureSlopeReference();
+    void clearSlopeReference();
+    void loadTargetAudio();
+    void applyManualTargetFromUi();
+    void applyCubicFitFromUi();
     void updateFrequencyRangeLabels();
     void updateFlatnessPowerFloorLabel();
+    void updateSlopeRegionLabels();
+    void updateManualTargetLabel();
+    void updateSlopeReadout();
     void updateGainLabel();
     void updateFeatureState(const spex::SpectralFeatureSnapshot& snapshot);
     void resetAutoscaleBounds();
@@ -62,6 +71,18 @@ private:
     juce::Label               flatnessPowerFloorLabel;
     juce::Slider              flatnessPowerFloorSlider;
     juce::Label               flatnessPowerFloorValueLabel;
+    juce::Label               slopeRegionLabel;
+    juce::Slider              slopeRegionSlider;
+    juce::Label               minSlopeFreqValueLabel;
+    juce::Label               maxSlopeFreqValueLabel;
+    juce::TextButton          captureReferenceButton { "Set Target" };
+    juce::TextButton          clearReferenceButton   { "Clear Target" };
+    juce::TextButton          loadTargetButton       { "Load Target Audio" };
+    juce::ToggleButton        manualTargetToggle;
+    juce::Slider              targetSlopeSlider;
+    juce::Label               targetSlopeValueLabel;
+    juce::ToggleButton        cubicFitToggle;
+    juce::Label               slopeReadoutLabel;
     juce::Label               gainLabel;
     juce::Slider              gainSlider;
     juce::Label               gainValueLabel;
@@ -90,6 +111,7 @@ private:
     std::unique_ptr<juce::DocumentWindow> featureStackWindow;
     juce::Component* featureStackContent { nullptr };
     std::unique_ptr<juce::FileChooser> exportChooser;
+    std::unique_ptr<juce::FileChooser> importChooser;
     float currentNyquistHz { 22050.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
