@@ -259,6 +259,19 @@ MainComponent::MainComponent()
     fitPeaksToggle.setToggleState(true, juce::dontSendNotification);
     fitPeaksToggle.onClick = [this] { applyFitPeaksFromUi(); };
 
+    peakFloorLabel.setText("Peak Floor", juce::dontSendNotification);
+    peakFloorLabel.setJustificationType(juce::Justification::centredLeft);
+    peakFloorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
+
+    peakFloorSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    peakFloorSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    peakFloorSlider.setRange(-80.0, 0.0, 0.5);
+    peakFloorSlider.setValue(-60.0, juce::dontSendNotification);
+    peakFloorSlider.onValueChange = [this] { applyPeakFloorFromUi(); };
+
+    peakFloorValueLabel.setJustificationType(juce::Justification::centredRight);
+    peakFloorValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
+
     averageToggle.setButtonText("Average");
     averageToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
     averageToggle.onClick = [this] { applyAveragingFromUi(); };
@@ -328,6 +341,9 @@ MainComponent::MainComponent()
     addAndMakeVisible(targetSlopeValueLabel);
     addAndMakeVisible(cubicFitToggle);
     addAndMakeVisible(fitPeaksToggle);
+    addAndMakeVisible(peakFloorLabel);
+    addAndMakeVisible(peakFloorSlider);
+    addAndMakeVisible(peakFloorValueLabel);
     addAndMakeVisible(averageToggle);
     addAndMakeVisible(clearAverageButton);
     addAndMakeVisible(slopeReadoutLabel);
@@ -362,6 +378,7 @@ MainComponent::MainComponent()
     applyManualTargetFromUi();
     applyCubicFitFromUi();
     applyFitPeaksFromUi();
+    applyPeakFloorFromUi();
     applyFreqWarpFromUi();
     applyAveragingFromUi();
 
@@ -552,6 +569,11 @@ void MainComponent::resized()
         cubicFitToggle.setBounds(targetRow.removeFromLeft(110));
         targetRow.removeFromLeft(8);
         fitPeaksToggle.setBounds(targetRow.removeFromLeft(110));
+        targetRow.removeFromLeft(16);
+        peakFloorLabel.setBounds(targetRow.removeFromLeft(74));
+        peakFloorSlider.setBounds(targetRow.removeFromLeft(150));
+        targetRow.removeFromLeft(6);
+        peakFloorValueLabel.setBounds(targetRow.removeFromLeft(64));
     }
 
     auto readoutRow = bounds.removeFromTop(26);
@@ -660,6 +682,19 @@ void MainComponent::applyFitPeaksFromUi()
 {
     spectralDisplay.setFitPeaksOnly(fitPeaksToggle.getToggleState());
     updateSlopeReadout();
+}
+
+void MainComponent::applyPeakFloorFromUi()
+{
+    spectralDisplay.setPeakThresholdDb(static_cast<float>(peakFloorSlider.getValue()));
+    updatePeakFloorLabel();
+    updateSlopeReadout();
+}
+
+void MainComponent::updatePeakFloorLabel()
+{
+    peakFloorValueLabel.setText(juce::String(static_cast<float>(peakFloorSlider.getValue()), 1) + " dB",
+                                juce::dontSendNotification);
 }
 
 void MainComponent::applyAveragingFromUi()
@@ -863,7 +898,8 @@ void MainComponent::setControlsVisible(bool visible)
         &slopeRegionLabel, &slopeRegionSlider, &minSlopeFreqValueLabel, &maxSlopeFreqValueLabel,
         &captureReferenceButton, &clearReferenceButton,
         &loadTargetButton, &manualTargetToggle, &targetSlopeSlider, &targetSlopeValueLabel,
-        &cubicFitToggle, &fitPeaksToggle, &averageToggle, &clearAverageButton
+        &cubicFitToggle, &fitPeaksToggle, &averageToggle, &clearAverageButton,
+        &peakFloorLabel, &peakFloorSlider, &peakFloorValueLabel
     };
 
     for (auto* c : controls)

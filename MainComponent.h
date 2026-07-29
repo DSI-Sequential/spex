@@ -45,6 +45,7 @@ private:
     void applySlopeRegionFromUi();
     void applyFreqWarpFromUi();
     void applyFitPeaksFromUi();
+    void applyPeakFloorFromUi();
     void applyAveragingFromUi();
     void captureSlopeReference();
     void clearSlopeReference();
@@ -58,6 +59,7 @@ private:
     void updateSlopeReadout();
     void updateGainLabel();
     void updateFreqWarpLabel();
+    void updatePeakFloorLabel();
     void updateFeatureState(const spex::SpectralFeatureSnapshot& snapshot);
     void resetAutoscaleBounds();
     juce::String formatFeatureValue(int featureIndex, float value) const;
@@ -89,6 +91,9 @@ private:
     juce::Label               targetSlopeValueLabel;
     juce::ToggleButton        cubicFitToggle;
     juce::ToggleButton        fitPeaksToggle;
+    juce::Label               peakFloorLabel;
+    juce::Slider              peakFloorSlider;
+    juce::Label               peakFloorValueLabel;
     juce::ToggleButton        averageToggle;
     juce::TextButton          clearAverageButton { "Clear Avg" };
     juce::Label               slopeReadoutLabel;

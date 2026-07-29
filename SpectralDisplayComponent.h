@@ -109,6 +109,17 @@ public:
         repaint();
     }
 
+    // Minimum height (dB) a spectral peak must reach to be tracked by the
+    // peak-only regression. Prevents the fit from locking onto tiny peaks
+    // (e.g. noise or sub-fundamental ripple below a saw's fundamental).
+    void setPeakThresholdDb(float thresholdDb)
+    {
+        peakThresholdDb = thresholdDb;
+        recomputeReferenceFits();
+        recomputeLiveFits();
+        repaint();
+    }
+
     // Warp the log-frequency axis. gamma == 1 is a plain log scale; gamma > 1
     // progressively expands the upper octaves (a "hyper-logarithmic" scale).
     void setFreqWarp(float gamma)
@@ -396,12 +407,13 @@ private:
         if (endBin - startBin < 8)
             return false;
 
-        // Coarse strict local maxima over +/-2 bins.
+        // Coarse strict local maxima over +/-2 bins, above the height threshold.
         std::vector<std::pair<float, int>> candidates;
         for (int b = startBin + 2; b <= endBin - 2; ++b)
         {
             const float v = dbAt(b);
-            if (v > dbAt(b - 1) && v >= dbAt(b + 1) && v > dbAt(b - 2) && v >= dbAt(b + 2))
+            if (v >= peakThresholdDb
+                && v > dbAt(b - 1) && v >= dbAt(b + 1) && v > dbAt(b - 2) && v >= dbAt(b + 2))
                 candidates.emplace_back(v, b);
         }
         if (candidates.size() < 4)
@@ -429,10 +441,12 @@ private:
         const int radius = std::max(2, static_cast<int>(std::lround(medianGap * 0.4)));
 
         // Spacing-aware local-maximum pass: keep a bin only if it is the
-        // maximum within +/-radius bins.
+        // maximum within +/-radius bins and clears the height threshold.
         for (int b = startBin; b <= endBin; ++b)
         {
             const float v = dbAt(b);
+            if (v < peakThresholdDb)
+                continue;
             bool isMax = true;
             for (int k = 1; k <= radius && isMax; ++k)
             {
@@ -964,6 +978,7 @@ private:
     bool  manualTargetEnabled { false };
     float manualTargetSlope { -6.97f };
     bool  fitPeaksOnly { true };   // fit regression to spectral peaks only
+    float peakThresholdDb { -60.0f }; // minimum peak height for peak-only fit
     float freqWarpGamma { 1.0f };  // >1 expands the upper octaves of the axis
     bool  averagingEnabled { false };
     long long avgFrameCount { 0 };
