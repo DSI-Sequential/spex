@@ -173,104 +173,20 @@ void drawTrace(juce::Graphics& g,
     g.setColour(colour.withAlpha(0.95f));
     g.strokePath(trace, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
-
-class FeatureStackContent final : public juce::Component
-{
-public:
-    FeatureStackContent() = default;
-
-    void setData(const std::array<std::vector<float>, kFeatureCount>& sourceHistory,
-                 const std::array<float, kFeatureCount>& sourceCurrent,
-                 const std::array<float, kFeatureCount>& sourceMins,
-                 const std::array<float, kFeatureCount>& sourceMaxs,
-                 const std::array<bool, kFeatureCount>& sourceHasBounds)
-    {
-        history = sourceHistory;
-        current = sourceCurrent;
-        mins = sourceMins;
-        maxs = sourceMaxs;
-        hasBounds = sourceHasBounds;
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        g.fillAll(juce::Colour(0xff0b0d10));
-
-        auto area = getLocalBounds().reduced(16);
-        const int rowGap = 10;
-        const int rowHeight = std::max(74, (area.getHeight() - rowGap * (kFeatureCount - 1)) / kFeatureCount);
-
-        for (int i = 0; i < kFeatureCount; ++i)
-        {
-            auto row = area.removeFromTop(rowHeight);
-            if (i < kFeatureCount - 1)
-                area.removeFromTop(rowGap);
-
-            g.setColour(juce::Colour(0x201f2937));
-            g.fillRoundedRectangle(row.toFloat(), 7.0f);
-            g.setColour(juce::Colour(0x40ffffff));
-            g.drawRoundedRectangle(row.toFloat(), 7.0f, 1.0f);
-
-            auto title = row.removeFromTop(22).reduced(10, 0);
-            g.setColour(juce::Colour(0xffdbeafe));
-            g.setFont(14.0f);
-            g.drawText(kFeatureNames[static_cast<size_t>(i)], title.removeFromLeft(280), juce::Justification::centredLeft, false);
-
-            g.setColour(kFeatureColours[static_cast<size_t>(i)]);
-            g.setFont(14.0f);
-            g.drawText(formatFeatureValueText(i, current[static_cast<size_t>(i)]), title, juce::Justification::centredRight, false);
-
-            drawTrace(g,
-                      row.reduced(10, 6).toFloat(),
-                      history[static_cast<size_t>(i)],
-                      makeAutoscaledRange(i,
-                                          mins[static_cast<size_t>(i)],
-                                          maxs[static_cast<size_t>(i)],
-                                          hasBounds[static_cast<size_t>(i)]),
-                      kFeatureColours[static_cast<size_t>(i)]);
-        }
-    }
-
-private:
-    std::array<std::vector<float>, kFeatureCount> history;
-    std::array<float, kFeatureCount> current {};
-    std::array<float, kFeatureCount> mins {};
-    std::array<float, kFeatureCount> maxs {};
-    std::array<bool, kFeatureCount> hasBounds {};
-};
-
-class FeatureStackWindow final : public juce::DocumentWindow
-{
-public:
-    FeatureStackWindow(FeatureStackContent* content, std::function<void()> onClose)
-        : juce::DocumentWindow("Feature Trace Stack",
-                               juce::Colour(0xff111827),
-                               juce::DocumentWindow::allButtons),
-          onCloseCallback(std::move(onClose))
-    {
-        setUsingNativeTitleBar(true);
-        setResizable(true, true);
-        setResizeLimits(640, 360, 2400, 1800);
-        setContentOwned(content, true);
-        centreWithSize(980, 760);
-        setVisible(true);
-    }
-
-    void closeButtonPressed() override
-    {
-        if (onCloseCallback)
-            onCloseCallback();
-    }
-
-private:
-    std::function<void()> onCloseCallback;
-};
 }
 
 MainComponent::MainComponent()
 {
     audioSettingsButton.onClick = [this] { openAudioSettings(); };
-    featureStackButton.onClick = [this] { openFeatureStackWindow(); };
+
+    controlsButton.setClickingTogglesState(true);
+    controlsButton.setToggleState(true, juce::dontSendNotification);
+    controlsButton.onClick = [this] { setControlsVisible(controlsButton.getToggleState()); };
+
+    featuresButton.setClickingTogglesState(true);
+    featuresButton.setToggleState(true, juce::dontSendNotification);
+    featuresButton.onClick = [this] { setFeaturePanelVisible(featuresButton.getToggleState()); };
+
     pauseButton.onClick = [this] { toggleScrollingPause(); };
     captureButton.onClick = [this] { toggleCapture(); };
     exportCsvButton.onClick = [this] { exportCaptureCsv(); };
@@ -338,6 +254,11 @@ MainComponent::MainComponent()
     cubicFitToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
     cubicFitToggle.onClick = [this] { applyCubicFitFromUi(); };
 
+    fitPeaksToggle.setButtonText("Fit peaks");
+    fitPeaksToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
+    fitPeaksToggle.setToggleState(true, juce::dontSendNotification);
+    fitPeaksToggle.onClick = [this] { applyFitPeaksFromUi(); };
+
     gainLabel.setText("Pre-gain", juce::dontSendNotification);
     gainLabel.setJustificationType(juce::Justification::centredLeft);
     gainLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
@@ -357,13 +278,27 @@ MainComponent::MainComponent()
     gainValueLabel.setJustificationType(juce::Justification::centredRight);
     gainValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
 
+    freqWarpLabel.setText("Freq Warp", juce::dontSendNotification);
+    freqWarpLabel.setJustificationType(juce::Justification::centredLeft);
+    freqWarpLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
+
+    freqWarpSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    freqWarpSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    freqWarpSlider.setRange(1.0, 4.0, 0.01);
+    freqWarpSlider.setValue(1.0, juce::dontSendNotification);
+    freqWarpSlider.onValueChange = [this] { applyFreqWarpFromUi(); };
+
+    freqWarpValueLabel.setJustificationType(juce::Justification::centredRight);
+    freqWarpValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
+
     minFeatureFreqValueLabel.setJustificationType(juce::Justification::centredRight);
     minFeatureFreqValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
     maxFeatureFreqValueLabel.setJustificationType(juce::Justification::centredRight);
     maxFeatureFreqValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xff94a3b8));
 
     addAndMakeVisible(audioSettingsButton);
-    addAndMakeVisible(featureStackButton);
+    addAndMakeVisible(controlsButton);
+    addAndMakeVisible(featuresButton);
     addAndMakeVisible(pauseButton);
     addAndMakeVisible(captureButton);
     addAndMakeVisible(exportCsvButton);
@@ -385,10 +320,14 @@ MainComponent::MainComponent()
     addAndMakeVisible(targetSlopeSlider);
     addAndMakeVisible(targetSlopeValueLabel);
     addAndMakeVisible(cubicFitToggle);
+    addAndMakeVisible(fitPeaksToggle);
     addAndMakeVisible(slopeReadoutLabel);
     addAndMakeVisible(gainLabel);
     addAndMakeVisible(gainSlider);
     addAndMakeVisible(gainValueLabel);
+    addAndMakeVisible(freqWarpLabel);
+    addAndMakeVisible(freqWarpSlider);
+    addAndMakeVisible(freqWarpValueLabel);
     addAndMakeVisible(spectralDisplay);
 
     for (auto& history : featureHistory)
@@ -413,6 +352,8 @@ MainComponent::MainComponent()
 
     applyManualTargetFromUi();
     applyCubicFitFromUi();
+    applyFitPeaksFromUi();
+    applyFreqWarpFromUi();
 
     setSize(1320, 800);
 
@@ -424,7 +365,6 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
-    featureStackWindow.reset();
     shutdownAudio();
 }
 
@@ -519,12 +459,15 @@ void MainComponent::paint(juce::Graphics& g)
     g.setFont(14.0f);
     g.drawText("Realtime audio spectrum", 16, 12, 280, 24, juce::Justification::centredLeft, false);
 
-    g.setColour(juce::Colour(0x30ffffff));
-    g.drawVerticalLine(featurePanelBounds.getX() - 8,
-                       static_cast<float>(featurePanelBounds.getY()),
-                       static_cast<float>(featurePanelBounds.getBottom()));
+    if (featurePanelVisible && !featurePanelBounds.isEmpty())
+    {
+        g.setColour(juce::Colour(0x30ffffff));
+        g.drawVerticalLine(featurePanelBounds.getX() - 8,
+                           static_cast<float>(featurePanelBounds.getY()),
+                           static_cast<float>(featurePanelBounds.getBottom()));
 
-    paintFeaturePanel(g, featurePanelBounds);
+        paintFeaturePanel(g, featurePanelBounds);
+    }
 }
 
 void MainComponent::resized()
@@ -538,60 +481,80 @@ void MainComponent::resized()
     header.removeFromRight(8);
     pauseButton.setBounds(header.removeFromRight(88));
     header.removeFromRight(8);
-    featureStackButton.setBounds(header.removeFromRight(132));
+    featuresButton.setBounds(header.removeFromRight(96));
+    header.removeFromRight(8);
+    controlsButton.setBounds(header.removeFromRight(96));
     header.removeFromRight(8);
     audioSettingsButton.setBounds(header.removeFromRight(148));
 
-    auto rangeRow = bounds.removeFromTop(34);
-    featureFreqRangeLabel.setBounds(rangeRow.removeFromLeft(108));
-    minFeatureFreqValueLabel.setBounds(rangeRow.removeFromLeft(72));
-    rangeRow.removeFromLeft(12);
-    featureFreqRangeSlider.setBounds(rangeRow.removeFromLeft(410));
-    rangeRow.removeFromLeft(12);
-    maxFeatureFreqValueLabel.setBounds(rangeRow.removeFromLeft(72));
+    if (controlsVisible)
+    {
+        auto rangeRow = bounds.removeFromTop(34);
+        featureFreqRangeLabel.setBounds(rangeRow.removeFromLeft(108));
+        minFeatureFreqValueLabel.setBounds(rangeRow.removeFromLeft(72));
+        rangeRow.removeFromLeft(12);
+        featureFreqRangeSlider.setBounds(rangeRow.removeFromLeft(410));
+        rangeRow.removeFromLeft(12);
+        maxFeatureFreqValueLabel.setBounds(rangeRow.removeFromLeft(72));
 
-    auto floorRow = bounds.removeFromTop(34);
-    flatnessPowerFloorLabel.setBounds(floorRow.removeFromLeft(108));
-    flatnessPowerFloorValueLabel.setBounds(floorRow.removeFromLeft(72));
-    floorRow.removeFromLeft(12);
-    flatnessPowerFloorSlider.setBounds(floorRow.removeFromLeft(410));
+        auto floorRow = bounds.removeFromTop(34);
+        flatnessPowerFloorLabel.setBounds(floorRow.removeFromLeft(108));
+        flatnessPowerFloorValueLabel.setBounds(floorRow.removeFromLeft(72));
+        floorRow.removeFromLeft(12);
+        flatnessPowerFloorSlider.setBounds(floorRow.removeFromLeft(410));
 
-    auto gainRow = bounds.removeFromTop(34);
-    gainLabel.setBounds(gainRow.removeFromLeft(108));
-    gainValueLabel.setBounds(gainRow.removeFromLeft(72));
-    gainRow.removeFromLeft(12);
-    gainSlider.setBounds(gainRow.removeFromLeft(410));
+        auto gainRow = bounds.removeFromTop(34);
+        gainLabel.setBounds(gainRow.removeFromLeft(108));
+        gainValueLabel.setBounds(gainRow.removeFromLeft(72));
+        gainRow.removeFromLeft(12);
+        gainSlider.setBounds(gainRow.removeFromLeft(410));
+        gainRow.removeFromLeft(24);
+        freqWarpLabel.setBounds(gainRow.removeFromLeft(96));
+        freqWarpValueLabel.setBounds(gainRow.removeFromLeft(64));
+        gainRow.removeFromLeft(8);
+        freqWarpSlider.setBounds(gainRow.removeFromLeft(200));
 
-    auto slopeRow = bounds.removeFromTop(34);
-    slopeRegionLabel.setBounds(slopeRow.removeFromLeft(108));
-    minSlopeFreqValueLabel.setBounds(slopeRow.removeFromLeft(72));
-    slopeRow.removeFromLeft(12);
-    slopeRegionSlider.setBounds(slopeRow.removeFromLeft(410));
-    slopeRow.removeFromLeft(12);
-    maxSlopeFreqValueLabel.setBounds(slopeRow.removeFromLeft(72));
-    slopeRow.removeFromLeft(16);
-    captureReferenceButton.setBounds(slopeRow.removeFromLeft(112));
-    slopeRow.removeFromLeft(8);
-    clearReferenceButton.setBounds(slopeRow.removeFromLeft(112));
+        auto slopeRow = bounds.removeFromTop(34);
+        slopeRegionLabel.setBounds(slopeRow.removeFromLeft(108));
+        minSlopeFreqValueLabel.setBounds(slopeRow.removeFromLeft(72));
+        slopeRow.removeFromLeft(12);
+        slopeRegionSlider.setBounds(slopeRow.removeFromLeft(410));
+        slopeRow.removeFromLeft(12);
+        maxSlopeFreqValueLabel.setBounds(slopeRow.removeFromLeft(72));
+        slopeRow.removeFromLeft(16);
+        captureReferenceButton.setBounds(slopeRow.removeFromLeft(112));
+        slopeRow.removeFromLeft(8);
+        clearReferenceButton.setBounds(slopeRow.removeFromLeft(112));
 
-    auto targetRow = bounds.removeFromTop(34);
-    loadTargetButton.setBounds(targetRow.removeFromLeft(150));
-    targetRow.removeFromLeft(16);
-    manualTargetToggle.setBounds(targetRow.removeFromLeft(130));
-    targetRow.removeFromLeft(4);
-    targetSlopeSlider.setBounds(targetRow.removeFromLeft(240));
-    targetRow.removeFromLeft(8);
-    targetSlopeValueLabel.setBounds(targetRow.removeFromLeft(96));
-    targetRow.removeFromLeft(16);
-    cubicFitToggle.setBounds(targetRow.removeFromLeft(110));
+        auto targetRow = bounds.removeFromTop(34);
+        loadTargetButton.setBounds(targetRow.removeFromLeft(150));
+        targetRow.removeFromLeft(16);
+        manualTargetToggle.setBounds(targetRow.removeFromLeft(130));
+        targetRow.removeFromLeft(4);
+        targetSlopeSlider.setBounds(targetRow.removeFromLeft(240));
+        targetRow.removeFromLeft(8);
+        targetSlopeValueLabel.setBounds(targetRow.removeFromLeft(96));
+        targetRow.removeFromLeft(16);
+        cubicFitToggle.setBounds(targetRow.removeFromLeft(110));
+        targetRow.removeFromLeft(8);
+        fitPeaksToggle.setBounds(targetRow.removeFromLeft(110));
+    }
 
     auto readoutRow = bounds.removeFromTop(26);
     slopeReadoutLabel.setBounds(readoutRow.reduced(4, 0));
 
     bounds.removeFromTop(6);
 
-    featurePanelBounds = bounds.removeFromRight(360);
-    spectralDisplay.setBounds(bounds.reduced(0, 0));
+    if (featurePanelVisible)
+    {
+        featurePanelBounds = bounds.removeFromRight(360);
+        spectralDisplay.setBounds(bounds);
+    }
+    else
+    {
+        featurePanelBounds = {};
+        spectralDisplay.setBounds(bounds);
+    }
 }
 
 void MainComponent::applyFeatureFrequencyRangeFromUi()
@@ -676,6 +639,24 @@ void MainComponent::applyCubicFitFromUi()
 {
     spectralDisplay.setShowPolynomialFit(cubicFitToggle.getToggleState());
     updateSlopeReadout();
+}
+
+void MainComponent::applyFitPeaksFromUi()
+{
+    spectralDisplay.setFitPeaksOnly(fitPeaksToggle.getToggleState());
+    updateSlopeReadout();
+}
+
+void MainComponent::applyFreqWarpFromUi()
+{
+    spectralDisplay.setFreqWarp(static_cast<float>(freqWarpSlider.getValue()));
+    updateFreqWarpLabel();
+}
+
+void MainComponent::updateFreqWarpLabel()
+{
+    freqWarpValueLabel.setText(juce::String(static_cast<float>(freqWarpSlider.getValue()), 2) + juce::String::charToString('x'),
+                               juce::dontSendNotification);
 }
 
 void MainComponent::updateManualTargetLabel()
@@ -835,23 +816,38 @@ void MainComponent::openAudioSettings()
     }
 }
 
-void MainComponent::openFeatureStackWindow()
+void MainComponent::setFeaturePanelVisible(bool visible)
 {
-    if (featureStackWindow != nullptr)
-    {
-        featureStackWindow->toFront(true);
-        return;
-    }
+    featurePanelVisible = visible;
+    if (featuresButton.getToggleState() != visible)
+        featuresButton.setToggleState(visible, juce::dontSendNotification);
+    resized();
+    repaint();
+}
 
-    auto* content = new FeatureStackContent();
-    content->setData(featureHistory, displayedValues, runningMinValues, runningMaxValues, hasAutoscaleBounds);
-    featureStackContent = content;
+void MainComponent::setControlsVisible(bool visible)
+{
+    controlsVisible = visible;
+    if (controlsButton.getToggleState() != visible)
+        controlsButton.setToggleState(visible, juce::dontSendNotification);
 
-    featureStackWindow = std::make_unique<FeatureStackWindow>(content, [this]
+    const std::initializer_list<juce::Component*> controls
     {
-        featureStackContent = nullptr;
-        featureStackWindow.reset();
-    });
+        &featureFreqRangeLabel, &featureFreqRangeSlider, &minFeatureFreqValueLabel, &maxFeatureFreqValueLabel,
+        &flatnessPowerFloorLabel, &flatnessPowerFloorSlider, &flatnessPowerFloorValueLabel,
+        &gainLabel, &gainSlider, &gainValueLabel,
+        &freqWarpLabel, &freqWarpSlider, &freqWarpValueLabel,
+        &slopeRegionLabel, &slopeRegionSlider, &minSlopeFreqValueLabel, &maxSlopeFreqValueLabel,
+        &captureReferenceButton, &clearReferenceButton,
+        &loadTargetButton, &manualTargetToggle, &targetSlopeSlider, &targetSlopeValueLabel,
+        &cubicFitToggle, &fitPeaksToggle
+    };
+
+    for (auto* c : controls)
+        c->setVisible(visible);
+
+    resized();
+    repaint();
 }
 
 void MainComponent::toggleCapture()
@@ -1078,16 +1074,6 @@ void MainComponent::timerCallback()
 
         if (!captureEnabled)
             exportCsvButton.setEnabled(!captureRows.empty());
-
-        if (featureStackContent != nullptr)
-        {
-            static_cast<FeatureStackContent*>(featureStackContent)->setData(featureHistory,
-                                                                           displayedValues,
-                                                                           runningMinValues,
-                                                                           runningMaxValues,
-                                                                           hasAutoscaleBounds);
-            featureStackContent->repaint();
-        }
 
         repaint();
     }

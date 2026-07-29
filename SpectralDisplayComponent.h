@@ -5,6 +5,8 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <utility>
 #include <vector>
 
 #include "SpectralFeatureAnalyzer.h"
@@ -30,7 +32,9 @@ public:
 
     using FeatureSnapshot = spex::SpectralFeatureSnapshot;
 
-    static constexpr int   fftOrder = 14;
+    // Steady-state analysis: frequency resolution matters, latency does not,
+    // so use a very large window (64k) for fine spectral detail.
+    static constexpr int   fftOrder = 16;
     static constexpr int   fftSize  = 1 << fftOrder;
     static constexpr float minFreq  = 30.0f;
     static constexpr float floorDb  = -80.0f;
@@ -91,6 +95,25 @@ public:
     }
 
     void setShowPolynomialFit(bool shouldShow) { showPoly = shouldShow; repaint(); }
+
+    // Fit the roll-off regression only to the spectral peaks (harmonic tops)
+    // rather than the whole magnitude envelope. This is what we want when the
+    // source is a harmonic waveform (e.g. a filtered sawtooth) and we only
+    // care about the trend of the harmonic amplitudes.
+    void setFitPeaksOnly(bool shouldFitPeaks)
+    {
+        fitPeaksOnly = shouldFitPeaks;
+        recomputeReferenceFits();
+        repaint();
+    }
+
+    // Warp the log-frequency axis. gamma == 1 is a plain log scale; gamma > 1
+    // progressively expands the upper octaves (a "hyper-logarithmic" scale).
+    void setFreqWarp(float gamma)
+    {
+        freqWarpGamma = std::max(1.0f, gamma);
+        repaint();
+    }
 
     // Manual numeric target: an ideal straight roll-off line at a chosen slope.
     void setManualTarget(bool enabled, float slopeDbPerOct)
@@ -295,18 +318,21 @@ public:
 private:
     int waterfallH() const { return getHeight() * 2 / 3; }
 
-    // Log-frequency <-> pixel mapping.
+    // Log-frequency <-> pixel mapping, with an optional axis warp that expands
+    // the upper octaves (freqWarpGamma > 1).
     float hzToX(float hz, int W) const
     {
         const float maxHz = sampleRate * 0.5f;
-        const float t = std::log(hz / minFreq) / std::log(maxHz / minFreq);
-        return std::clamp(t, 0.0f, 1.0f) * static_cast<float>(W);
+        float t = std::log(hz / minFreq) / std::log(maxHz / minFreq);
+        t = std::pow(std::clamp(t, 0.0f, 1.0f), freqWarpGamma);
+        return t * static_cast<float>(W);
     }
 
     float xToHz(int x, int W) const
     {
         const float maxHz = sampleRate * 0.5f;
-        const float t = static_cast<float>(x) / static_cast<float>(W);
+        float t = static_cast<float>(x) / static_cast<float>(W);
+        t = std::pow(std::clamp(t, 0.0f, 1.0f), 1.0f / freqWarpGamma);
         return minFreq * std::pow(maxHz / minFreq, t);
     }
 
@@ -317,6 +343,69 @@ private:
             static_cast<int>(hz * static_cast<float>(fftSize) / sampleRate),
             0, fftSize / 2);
         return mag[bin];
+    }
+
+    // Detect harmonic peak bins within [startBin, endBin]. A coarse
+    // local-maximum pass estimates the harmonic spacing from the strongest
+    // candidates, then a spacing-aware local-maximum pass keeps only the
+    // harmonic tops (not the noise between them). Returns false if the region
+    // is too small or shows no clear harmonic structure.
+    template <typename DbAt>
+    bool collectHarmonicPeaks(DbAt dbAt, int startBin, int endBin, std::vector<int>& out) const
+    {
+        out.clear();
+        if (endBin - startBin < 8)
+            return false;
+
+        // Coarse strict local maxima over +/-2 bins.
+        std::vector<std::pair<float, int>> candidates;
+        for (int b = startBin + 2; b <= endBin - 2; ++b)
+        {
+            const float v = dbAt(b);
+            if (v > dbAt(b - 1) && v >= dbAt(b + 1) && v > dbAt(b - 2) && v >= dbAt(b + 2))
+                candidates.emplace_back(v, b);
+        }
+        if (candidates.size() < 4)
+            return false;
+
+        // Estimate harmonic spacing (in bins) from the strongest candidates,
+        // which are almost certainly true harmonics rather than noise ripple.
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+        const int strongCount = std::min<int>(12, static_cast<int>(candidates.size()));
+        std::vector<int> strongBins;
+        strongBins.reserve(static_cast<size_t>(strongCount));
+        for (int i = 0; i < strongCount; ++i)
+            strongBins.push_back(candidates[static_cast<size_t>(i)].second);
+        std::sort(strongBins.begin(), strongBins.end());
+
+        std::vector<int> gaps;
+        gaps.reserve(strongBins.size());
+        for (size_t i = 1; i < strongBins.size(); ++i)
+            gaps.push_back(strongBins[i] - strongBins[i - 1]);
+        if (gaps.empty())
+            return false;
+        std::sort(gaps.begin(), gaps.end());
+        const int medianGap = gaps[gaps.size() / 2];
+        const int radius = std::max(2, static_cast<int>(std::lround(medianGap * 0.4)));
+
+        // Spacing-aware local-maximum pass: keep a bin only if it is the
+        // maximum within +/-radius bins.
+        for (int b = startBin; b <= endBin; ++b)
+        {
+            const float v = dbAt(b);
+            bool isMax = true;
+            for (int k = 1; k <= radius && isMax; ++k)
+            {
+                const int lo = std::max(startBin, b - k);
+                const int hi = std::min(endBin, b + k);
+                if (dbAt(lo) > v || dbAt(hi) > v)
+                    isMax = false;
+            }
+            if (isMax)
+                out.push_back(b);
+        }
+        return out.size() >= 4;
     }
 
     // Least-squares fit of dB against log2(freq) over the selected region for
@@ -345,16 +434,27 @@ private:
         if (endBin <= startBin)
             return;
 
+        // Choose the bins to fit: either every bin (full magnitude envelope)
+        // or only the spectral peaks (harmonic tops). The latter is what makes
+        // the roll-off estimate meaningful for a harmonic source such as a
+        // filtered sawtooth, where the trend of the harmonic amplitudes - not
+        // the noise floor between them - is what we care about.
+        std::vector<int> peakBins;
+        const bool usePeaks = fitPeaksOnly
+                            && collectHarmonicPeaks(dbAt, startBin, endBin, peakBins)
+                            && peakBins.size() >= 4;
+
         // Moments: M[k] = sum x^k (k=0..6); Y[j] = sum y*x^j (j=0..3); Syy = sum y^2.
         std::array<double, 7> M {};
         std::array<double, 4> Y {};
         double Syy = 0.0;
         double n = 0.0;
-        for (int b = startBin; b <= endBin; ++b)
+
+        auto accumulate = [&](int b)
         {
             const float freq = static_cast<float>(b) * binHz;
             if (freq <= 0.0f)
-                continue;
+                return;
             const double x = std::log2(freq / 1000.0f);
             const double y = static_cast<double>(dbAt(b));
             double xp = 1.0;
@@ -363,7 +463,12 @@ private:
             for (int j = 0; j < 4; ++j) { Y[static_cast<size_t>(j)] += y * xj; xj *= x; }
             Syy += y * y;
             n += 1.0;
-        }
+        };
+
+        if (usePeaks)
+            for (int b : peakBins) accumulate(b);
+        else
+            for (int b = startBin; b <= endBin; ++b) accumulate(b);
 
         if (n < 4.0)
             return;
@@ -640,12 +745,22 @@ private:
 
             const float x0 = static_cast<float>(bx) + hzToX(f0, W);
             const float x1 = static_cast<float>(bx) + hzToX(f1, W);
-            const float y0 = dbToY(fit.slopeDbPerOct * std::log2(f0 / 1000.0f) + fit.interceptDb);
             const float y1 = dbToY(fit.slopeDbPerOct * std::log2(f1 / 1000.0f) + fit.interceptDb);
 
+            // Sample the line in log-frequency so it stays straight-in-log2
+            // even when the display axis is warped.
             juce::Path fitPath;
-            fitPath.startNewSubPath(x0, y0);
-            fitPath.lineTo(x1, y1);
+            constexpr int steps = 96;
+            for (int i = 0; i <= steps; ++i)
+            {
+                const float t  = static_cast<float>(i) / static_cast<float>(steps);
+                const float hz = f0 * std::pow(f1 / f0, t);
+                const float db = fit.slopeDbPerOct * std::log2(hz / 1000.0f) + fit.interceptDb;
+                const float px = static_cast<float>(bx) + hzToX(hz, W);
+                const float py = dbToY(db);
+                if (i == 0) fitPath.startNewSubPath(px, py);
+                else        fitPath.lineTo(px, py);
+            }
 
             g.setColour(colour);
             if (dashed)
@@ -742,14 +857,21 @@ private:
         {
             const float anchorDb = liveFit.valid ? hzToDb(regionLo) : -12.0f;
             const float intercept = anchorDb - manualTargetSlope * std::log2(regionLo / 1000.0f);
-            const float x0 = static_cast<float>(bx) + hzToX(regionLo, W);
             const float x1 = static_cast<float>(bx) + hzToX(regionHi, W);
-            const float y0 = dbToY(manualTargetSlope * std::log2(regionLo / 1000.0f) + intercept);
             const float y1 = dbToY(manualTargetSlope * std::log2(regionHi / 1000.0f) + intercept);
 
             juce::Path targetPath;
-            targetPath.startNewSubPath(x0, y0);
-            targetPath.lineTo(x1, y1);
+            constexpr int steps = 96;
+            for (int i = 0; i <= steps; ++i)
+            {
+                const float t  = static_cast<float>(i) / static_cast<float>(steps);
+                const float hz = regionLo * std::pow(regionHi / regionLo, t);
+                const float db = manualTargetSlope * std::log2(hz / 1000.0f) + intercept;
+                const float px = static_cast<float>(bx) + hzToX(hz, W);
+                const float py = dbToY(db);
+                if (i == 0) targetPath.startNewSubPath(px, py);
+                else        targetPath.lineTo(px, py);
+            }
             juce::Path d;
             const float dp[] { 6.0f, 5.0f };
             juce::PathStrokeType(2.0f).createDashedStroke(d, targetPath, dp, 2);
@@ -790,6 +912,8 @@ private:
     bool  showPoly { false };
     bool  manualTargetEnabled { false };
     float manualTargetSlope { -6.97f };
+    bool  fitPeaksOnly { true };   // fit regression to spectral peaks only
+    float freqWarpGamma { 1.0f };  // >1 expands the upper octaves of the axis
 
     juce::Image wfImg;
     int wfRow { 0 };

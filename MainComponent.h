@@ -35,13 +35,16 @@ private:
     };
 
     void openAudioSettings();
-    void openFeatureStackWindow();
     void toggleCapture();
     void exportCaptureCsv();
     void toggleScrollingPause();
+    void setFeaturePanelVisible(bool visible);
+    void setControlsVisible(bool visible);
     void applyFeatureFrequencyRangeFromUi();
     void applyFlatnessPowerFloorFromUi();
     void applySlopeRegionFromUi();
+    void applyFreqWarpFromUi();
+    void applyFitPeaksFromUi();
     void captureSlopeReference();
     void clearSlopeReference();
     void loadTargetAudio();
@@ -53,6 +56,7 @@ private:
     void updateManualTargetLabel();
     void updateSlopeReadout();
     void updateGainLabel();
+    void updateFreqWarpLabel();
     void updateFeatureState(const spex::SpectralFeatureSnapshot& snapshot);
     void resetAutoscaleBounds();
     juce::String formatFeatureValue(int featureIndex, float value) const;
@@ -60,7 +64,8 @@ private:
     void timerCallback() override;
 
     juce::TextButton          audioSettingsButton { "Audio Settings" };
-    juce::TextButton          featureStackButton  { "Feature Stack" };
+    juce::TextButton          controlsButton      { "Controls" };
+    juce::TextButton          featuresButton      { "Features" };
     juce::TextButton          pauseButton         { "Pause" };
     juce::TextButton          captureButton       { "Start Capture" };
     juce::TextButton          exportCsvButton     { "Export CSV" };
@@ -82,10 +87,14 @@ private:
     juce::Slider              targetSlopeSlider;
     juce::Label               targetSlopeValueLabel;
     juce::ToggleButton        cubicFitToggle;
+    juce::ToggleButton        fitPeaksToggle;
     juce::Label               slopeReadoutLabel;
     juce::Label               gainLabel;
     juce::Slider              gainSlider;
     juce::Label               gainValueLabel;
+    juce::Label               freqWarpLabel;
+    juce::Slider              freqWarpSlider;
+    juce::Label               freqWarpValueLabel;
 
     SpectralDisplayComponent spectralDisplay;
     std::vector<float>       monoScratch;
@@ -102,14 +111,14 @@ private:
 
     bool captureEnabled { false };
     bool scrollingPaused { false };
+    bool featurePanelVisible { true };
+    bool controlsVisible { true };
     double captureStartMs { 0.0 };
     std::vector<CaptureRow> captureRows;
 
     std::atomic<float>      preAnalysisGainLinear { 1.0f };
 
     std::unique_ptr<juce::DialogWindow> audioSettingsWindow;
-    std::unique_ptr<juce::DocumentWindow> featureStackWindow;
-    juce::Component* featureStackContent { nullptr };
     std::unique_ptr<juce::FileChooser> exportChooser;
     std::unique_ptr<juce::FileChooser> importChooser;
     float currentNyquistHz { 22050.0f };
