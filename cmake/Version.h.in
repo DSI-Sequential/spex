@@ -1,0 +1,9 @@
+#pragma once
+
+// Generated at build time from version.toml and git. Do not edit by hand.
+
+#define SPEX_VERSION_MAJOR @SPEX_VERSION_MAJOR@
+#define SPEX_VERSION_MINOR @SPEX_VERSION_MINOR@
+#define SPEX_VERSION_PATCH @SPEX_VERSION_PATCH@
+#define SPEX_VERSION_STRING "@SPEX_VERSION_STRING@"
+#define SPEX_GIT_HASH "@SPEX_GIT_HASH@"
