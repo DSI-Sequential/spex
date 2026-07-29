@@ -52,6 +52,7 @@ private:
     void loadTargetAudio();
     void applyManualTargetFromUi();
     void applyCubicFitFromUi();
+    void applyPeakMarkersFromUi();
     void updateFrequencyRangeLabels();
     void updateFlatnessPowerFloorLabel();
     void updateSlopeRegionLabels();
@@ -91,6 +92,7 @@ private:
     juce::Label               targetSlopeValueLabel;
     juce::ToggleButton        cubicFitToggle;
     juce::ToggleButton        fitPeaksToggle;
+    juce::ToggleButton        peakMarkersToggle;
     juce::Label               peakFloorLabel;
     juce::Slider              peakFloorSlider;
     juce::Label               peakFloorValueLabel;

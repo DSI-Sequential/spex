@@ -97,6 +97,11 @@ public:
 
     void setShowPolynomialFit(bool shouldShow) { showPoly = shouldShow; repaint(); }
 
+    // Overlay precise peak markers (parabolic-interpolated in x/y) on the
+    // envelope so the reader isn't misled by line/pixel interpolation when
+    // examining peak amplitude progression.
+    void setShowPeakMarkers(bool shouldShow) { showPeakMarkers = shouldShow; repaint(); }
+
     // Fit the roll-off regression only to the spectral peaks (harmonic tops)
     // rather than the whole magnitude envelope. This is what we want when the
     // source is a harmonic waveform (e.g. a filtered sawtooth) and we only
@@ -459,6 +464,51 @@ private:
                 out.push_back(b);
         }
         return out.size() >= 4;
+    }
+
+    // Refine harmonic peak locations to sub-bin precision (x = frequency,
+    // y = dB) via parabolic interpolation across each peak's three bins, over
+    // the whole displayed spectrum. Fills out with (hz, dB) pairs.
+    void collectRefinedPeaks(std::vector<std::pair<float, float>>& out) const
+    {
+        out.clear();
+        const float binHz = (sampleRate > 0.0f) ? sampleRate / static_cast<float>(fftSize) : 0.0f;
+        if (binHz <= 0.0f)
+            return;
+
+        const int startBin = std::max(1, static_cast<int>(std::ceil(minFreq / binHz)));
+        const int endBin = fftSize / 2;
+        if (endBin <= startBin)
+            return;
+
+        std::vector<int> peakBins;
+        if (!collectHarmonicPeaks([this](int i) { return mag[static_cast<size_t>(i)]; },
+                                  startBin, endBin, peakBins))
+            return;
+
+        out.reserve(peakBins.size());
+        for (int b : peakBins)
+        {
+            float hz;
+            float db;
+            if (b > 0 && b < fftSize / 2)
+            {
+                const float ym1 = mag[static_cast<size_t>(b - 1)];
+                const float y0  = mag[static_cast<size_t>(b)];
+                const float yp1 = mag[static_cast<size_t>(b + 1)];
+                const float denom = ym1 - 2.0f * y0 + yp1;
+                float delta = std::abs(denom) > 1.0e-9f ? 0.5f * (ym1 - yp1) / denom : 0.0f;
+                delta = std::clamp(delta, -0.5f, 0.5f);
+                hz = (static_cast<float>(b) + delta) * binHz;
+                db = y0 - 0.25f * (ym1 - yp1) * delta;
+            }
+            else
+            {
+                hz = static_cast<float>(b) * binHz;
+                db = mag[static_cast<size_t>(b)];
+            }
+            out.emplace_back(hz, db);
+        }
     }
 
     // Least-squares fit of dB against log2(freq) over the selected region for
@@ -948,6 +998,40 @@ private:
                        static_cast<int>(x1) - 130, static_cast<int>(y1) + 2, 126, 14,
                        juce::Justification::centredRight, false);
         }
+
+        // Precise peak markers: parabolic-interpolated peak positions so the
+        // reader is not misled by line/pixel interpolation when examining the
+        // progression of peak amplitudes.
+        if (showPeakMarkers)
+        {
+            std::vector<std::pair<float, float>> peaks; // (hz, dB)
+            collectRefinedPeaks(peaks);
+
+            if (!peaks.empty())
+            {
+                // Faint line connecting successive peak tops (the progression).
+                juce::Path progression;
+                bool progStarted = false;
+                for (const auto& pk : peaks)
+                {
+                    const float px = static_cast<float>(bx) + hzToX(pk.first, W);
+                    const float py = dbToY(pk.second);
+                    if (!progStarted) { progression.startNewSubPath(px, py); progStarted = true; }
+                    else              { progression.lineTo(px, py); }
+                }
+                g.setColour(juce::Colour(0x5500e5ff));
+                g.strokePath(progression, juce::PathStrokeType(1.0f));
+
+                // Discrete markers at the exact interpolated peak positions.
+                g.setColour(juce::Colour(0xff00e5ff));
+                for (const auto& pk : peaks)
+                {
+                    const float px = static_cast<float>(bx) + hzToX(pk.first, W);
+                    const float py = dbToY(pk.second);
+                    g.fillEllipse(px - 2.5f, py - 2.5f, 5.0f, 5.0f);
+                }
+            }
+        }
     }
 
     juce::dsp::FFT fft { fftOrder };
@@ -975,6 +1059,7 @@ private:
     float refBinHz { 0.0f };           // frequency spacing of reference bins
     juce::String referenceName;
     bool  showPoly { false };
+    bool  showPeakMarkers { false };
     bool  manualTargetEnabled { false };
     float manualTargetSlope { -6.97f };
     bool  fitPeaksOnly { true };   // fit regression to spectral peaks only

@@ -254,6 +254,10 @@ MainComponent::MainComponent()
     cubicFitToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
     cubicFitToggle.onClick = [this] { applyCubicFitFromUi(); };
 
+    peakMarkersToggle.setButtonText("Peak marks");
+    peakMarkersToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
+    peakMarkersToggle.onClick = [this] { applyPeakMarkersFromUi(); };
+
     fitPeaksToggle.setButtonText("Fit peaks");
     fitPeaksToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
     fitPeaksToggle.setToggleState(true, juce::dontSendNotification);
@@ -341,6 +345,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(targetSlopeValueLabel);
     addAndMakeVisible(cubicFitToggle);
     addAndMakeVisible(fitPeaksToggle);
+    addAndMakeVisible(peakMarkersToggle);
     addAndMakeVisible(peakFloorLabel);
     addAndMakeVisible(peakFloorSlider);
     addAndMakeVisible(peakFloorValueLabel);
@@ -379,6 +384,7 @@ MainComponent::MainComponent()
     applyCubicFitFromUi();
     applyFitPeaksFromUi();
     applyPeakFloorFromUi();
+    applyPeakMarkersFromUi();
     applyFreqWarpFromUi();
     applyAveragingFromUi();
 
@@ -533,6 +539,8 @@ void MainComponent::resized()
         averageToggle.setBounds(floorRow.removeFromLeft(110));
         floorRow.removeFromLeft(8);
         clearAverageButton.setBounds(floorRow.removeFromLeft(110));
+        floorRow.removeFromLeft(16);
+        peakMarkersToggle.setBounds(floorRow.removeFromLeft(120));
 
         auto gainRow = bounds.removeFromTop(34);
         gainLabel.setBounds(gainRow.removeFromLeft(108));
@@ -676,6 +684,11 @@ void MainComponent::applyCubicFitFromUi()
 {
     spectralDisplay.setShowPolynomialFit(cubicFitToggle.getToggleState());
     updateSlopeReadout();
+}
+
+void MainComponent::applyPeakMarkersFromUi()
+{
+    spectralDisplay.setShowPeakMarkers(peakMarkersToggle.getToggleState());
 }
 
 void MainComponent::applyFitPeaksFromUi()
@@ -899,7 +912,7 @@ void MainComponent::setControlsVisible(bool visible)
         &captureReferenceButton, &clearReferenceButton,
         &loadTargetButton, &manualTargetToggle, &targetSlopeSlider, &targetSlopeValueLabel,
         &cubicFitToggle, &fitPeaksToggle, &averageToggle, &clearAverageButton,
-        &peakFloorLabel, &peakFloorSlider, &peakFloorValueLabel
+        &peakFloorLabel, &peakFloorSlider, &peakFloorValueLabel, &peakMarkersToggle
     };
 
     for (auto* c : controls)
