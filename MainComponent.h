@@ -132,7 +132,7 @@ private:
 
     std::atomic<float>      preAnalysisGainLinear { 1.0f };
 
-    std::unique_ptr<juce::DialogWindow> audioSettingsWindow;
+    juce::Component::SafePointer<juce::DialogWindow> audioSettingsWindow;
     std::unique_ptr<juce::FileChooser> exportChooser;
     std::unique_ptr<juce::FileChooser> importChooser;
     float currentNyquistHz { 22050.0f };

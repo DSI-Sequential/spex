@@ -180,6 +180,7 @@ void drawTrace(juce::Graphics& g,
 MainComponent::MainComponent()
 {
     audioSettingsButton.onClick = [this] { openAudioSettings(); };
+    audioSettingsButton.setWantsKeyboardFocus(false);
 
     controlsButton.setClickingTogglesState(true);
     controlsButton.setToggleState(true, juce::dontSendNotification);
@@ -882,8 +883,14 @@ void MainComponent::openAudioSettings()
 {
     if (audioSettingsWindow != nullptr)
     {
-        audioSettingsWindow->toFront(true);
-        return;
+        if (audioSettingsWindow->isShowing())
+        {
+            audioSettingsWindow->toFront(true);
+            audioSettingsButton.setState(juce::Button::buttonNormal);
+            return;
+        }
+
+        audioSettingsWindow = nullptr;
     }
 
     auto* selector = new juce::AudioDeviceSelectorComponent(deviceManager,
@@ -895,6 +902,7 @@ void MainComponent::openAudioSettings()
                                                             true,
                                                             true,
                                                             false);
+    selector->setSize(520, 460);
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(selector);
@@ -909,19 +917,13 @@ void MainComponent::openAudioSettings()
     else
         options.componentToCentreAround = this;
 
-    audioSettingsWindow.reset(options.launchAsync());
-
-    if (audioSettingsWindow != nullptr)
+    if (auto* window = options.launchAsync())
     {
-        audioSettingsWindow->setAlwaysOnTop(true);
-        audioSettingsWindow->setSize(520, 460);
-        audioSettingsWindow->enterModalState(true,
-                                             juce::ModalCallbackFunction::create([this](int)
-                                             {
-                                                 audioSettingsWindow.reset();
-                                             }),
-                                             true);
+        audioSettingsWindow = window;
+        window->setAlwaysOnTop(true);
     }
+
+    audioSettingsButton.setState(juce::Button::buttonNormal);
 }
 
 void MainComponent::setFeaturePanelVisible(bool visible)
