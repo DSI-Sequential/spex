@@ -92,7 +92,9 @@ All input channels are summed to mono before analysis.
 ## The display
 
 The central area is split into two vertically stacked views that share a
-logarithmic frequency axis (from 30 Hz up to the current Nyquist frequency):
+logarithmic frequency axis (from 30 Hz up to the current Nyquist frequency).
+Use the **Waterfall** and **Envelope** toggles in the controls block to show
+or hide either section independently:
 
 | Region | Content |
 | --- | --- |
@@ -150,6 +152,8 @@ with **Controls**) holds the analysis parameters.
 | **Average** | toggle | Time-averages the displayed spectrum for a smoother envelope. |
 | **Clear Avg** | button | Resets the accumulated average. |
 | **Peak marks** | toggle | Overlays interpolated peak markers on the envelope. |
+| **Waterfall** | toggle | Shows or hides the waterfall display. |
+| **Envelope** | toggle | Shows or hides the spectral envelope display. |
 | **Pre-gain** | slider (−12…+12 dB) | Gain applied to the input before analysis. |
 | **Freq Warp** | slider (1…4) | Warps the frequency axis to emphasize a region of the spectrum. |
 | **Slope Region** | dual slider | Frequency region (min/max Hz) over which the roll-off slope is fit. |
