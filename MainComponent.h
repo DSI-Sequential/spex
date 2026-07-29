@@ -45,6 +45,7 @@ private:
     void applySlopeRegionFromUi();
     void applyFreqWarpFromUi();
     void applyFitPeaksFromUi();
+    void applyAveragingFromUi();
     void captureSlopeReference();
     void clearSlopeReference();
     void loadTargetAudio();
@@ -88,6 +89,8 @@ private:
     juce::Label               targetSlopeValueLabel;
     juce::ToggleButton        cubicFitToggle;
     juce::ToggleButton        fitPeaksToggle;
+    juce::ToggleButton        averageToggle;
+    juce::TextButton          clearAverageButton { "Clear Avg" };
     juce::Label               slopeReadoutLabel;
     juce::Label               gainLabel;
     juce::Slider              gainSlider;

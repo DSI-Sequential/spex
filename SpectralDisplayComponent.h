@@ -92,6 +92,7 @@ public:
         slopeRegionMinHz = std::max(0.0f, std::min(minHz, maxHz));
         slopeRegionMaxHz = std::max(0.0f, std::max(minHz, maxHz));
         recomputeReferenceFits();
+        recomputeLiveFits();
     }
 
     void setShowPolynomialFit(bool shouldShow) { showPoly = shouldShow; repaint(); }
@@ -104,6 +105,7 @@ public:
     {
         fitPeaksOnly = shouldFitPeaks;
         recomputeReferenceFits();
+        recomputeLiveFits();
         repaint();
     }
 
@@ -113,6 +115,25 @@ public:
     {
         freqWarpGamma = std::max(1.0f, gamma);
         repaint();
+    }
+
+    // Cumulative-average magnitude envelope. When enabled, the envelope (and
+    // therefore the regression fits) represents the running power average of
+    // every frame accumulated since the last clear, rather than the default
+    // exponential moving average.
+    void setAveragingEnabled(bool enabled)
+    {
+        averagingEnabled = enabled;
+        if (enabled)
+            clearAveraging();
+        repaint();
+    }
+    bool isAveragingEnabled() const { return averagingEnabled; }
+
+    void clearAveraging()
+    {
+        avgPower.fill(0.0);
+        avgFrameCount = 0;
     }
 
     // Manual numeric target: an ideal straight roll-off line at a chosen slope.
@@ -257,6 +278,9 @@ public:
     // Message thread: compute FFT, push waterfall row, repaint.
     bool update()
     {
+        // A paused display freezes the spectrogram, the magnitude envelope
+        // (including cumulative averaging) and the regression fits alike.
+        if (scrollingPaused) return false;
         if (!hasNew.exchange(false, std::memory_order_acquire)) return false;
 
         // Copy ring buffer (oldest → newest) with Hann window applied.
@@ -277,24 +301,39 @@ public:
 
         featureAnalyzer.analyze(fftBuf.data(), fftSize / 2 + 1, sampleRate, fftSize, peakAbs, sumSquares);
 
-        // Normalise and smooth.
+        // Update the magnitude envelope: either a cumulative power average
+        // since the last clear, or an exponential moving average (default).
         const float normDb = juce::Decibels::gainToDecibels(static_cast<float>(fftSize));
-        const float alpha  = 0.65f;
-        for (int i = 0; i <= fftSize / 2; ++i)
+        if (averagingEnabled)
         {
-            const float db = fftBuf[i] > 0.0f
-                ? juce::Decibels::gainToDecibels(fftBuf[i]) - normDb
-                : floorDb;
-            mag[i] = alpha * mag[i] + (1.0f - alpha) * std::max(db, floorDb);
+            ++avgFrameCount;
+            const double invFrames = 1.0 / static_cast<double>(avgFrameCount);
+            for (int i = 0; i <= fftSize / 2; ++i)
+            {
+                const double power = static_cast<double>(fftBuf[i]) * static_cast<double>(fftBuf[i]);
+                avgPower[static_cast<size_t>(i)] += power;
+                const double meanMag = std::sqrt(avgPower[static_cast<size_t>(i)] * invFrames);
+                const float db = meanMag > 0.0
+                    ? juce::Decibels::gainToDecibels(static_cast<float>(meanMag)) - normDb
+                    : floorDb;
+                mag[i] = std::max(db, floorDb);
+            }
+        }
+        else
+        {
+            const float alpha = 0.65f;
+            for (int i = 0; i <= fftSize / 2; ++i)
+            {
+                const float db = fftBuf[i] > 0.0f
+                    ? juce::Decibels::gainToDecibels(fftBuf[i]) - normDb
+                    : floorDb;
+                mag[i] = alpha * mag[i] + (1.0f - alpha) * std::max(db, floorDb);
+            }
         }
 
-        const float liveBinHz = (sampleRate > 0.0f) ? sampleRate / static_cast<float>(fftSize) : 0.0f;
-        computeFits(liveBinHz,
-                    fftSize / 2 + 1,
-                    [this](int i) { return mag[static_cast<size_t>(i)]; },
-                    liveFit, livePoly);
+        recomputeLiveFits();
 
-        if (!scrollingPaused) pushWaterfallRow();
+        pushWaterfallRow();
         repaint();
         return true;
     }
@@ -567,6 +606,18 @@ private:
                     static_cast<int>(refMagsDb.size()),
                     [this](int i) { return refMagsDb[static_cast<size_t>(i)]; },
                     refFit, refPoly);
+    }
+
+    // Recompute the live linear/cubic fits from the current (possibly frozen
+    // or averaged) magnitude envelope. Called every frame and whenever the
+    // fit parameters change so the fit stays correct even while paused.
+    void recomputeLiveFits()
+    {
+        const float liveBinHz = (sampleRate > 0.0f) ? sampleRate / static_cast<float>(fftSize) : 0.0f;
+        computeFits(liveBinHz,
+                    fftSize / 2 + 1,
+                    [this](int i) { return mag[static_cast<size_t>(i)]; },
+                    liveFit, livePoly);
     }
 
     // dB -> waterfall colour.
@@ -914,6 +965,9 @@ private:
     float manualTargetSlope { -6.97f };
     bool  fitPeaksOnly { true };   // fit regression to spectral peaks only
     float freqWarpGamma { 1.0f };  // >1 expands the upper octaves of the axis
+    bool  averagingEnabled { false };
+    long long avgFrameCount { 0 };
+    std::array<double, fftSize / 2 + 1> avgPower {}; // cumulative power per bin
 
     juce::Image wfImg;
     int wfRow { 0 };

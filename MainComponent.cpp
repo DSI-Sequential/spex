@@ -259,6 +259,13 @@ MainComponent::MainComponent()
     fitPeaksToggle.setToggleState(true, juce::dontSendNotification);
     fitPeaksToggle.onClick = [this] { applyFitPeaksFromUi(); };
 
+    averageToggle.setButtonText("Average");
+    averageToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
+    averageToggle.onClick = [this] { applyAveragingFromUi(); };
+
+    clearAverageButton.onClick = [this] { spectralDisplay.clearAveraging(); };
+    clearAverageButton.setEnabled(false);
+
     gainLabel.setText("Pre-gain", juce::dontSendNotification);
     gainLabel.setJustificationType(juce::Justification::centredLeft);
     gainLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd1d5db));
@@ -321,6 +328,8 @@ MainComponent::MainComponent()
     addAndMakeVisible(targetSlopeValueLabel);
     addAndMakeVisible(cubicFitToggle);
     addAndMakeVisible(fitPeaksToggle);
+    addAndMakeVisible(averageToggle);
+    addAndMakeVisible(clearAverageButton);
     addAndMakeVisible(slopeReadoutLabel);
     addAndMakeVisible(gainLabel);
     addAndMakeVisible(gainSlider);
@@ -354,6 +363,7 @@ MainComponent::MainComponent()
     applyCubicFitFromUi();
     applyFitPeaksFromUi();
     applyFreqWarpFromUi();
+    applyAveragingFromUi();
 
     setSize(1320, 800);
 
@@ -502,6 +512,10 @@ void MainComponent::resized()
         flatnessPowerFloorValueLabel.setBounds(floorRow.removeFromLeft(72));
         floorRow.removeFromLeft(12);
         flatnessPowerFloorSlider.setBounds(floorRow.removeFromLeft(410));
+        floorRow.removeFromLeft(24);
+        averageToggle.setBounds(floorRow.removeFromLeft(110));
+        floorRow.removeFromLeft(8);
+        clearAverageButton.setBounds(floorRow.removeFromLeft(110));
 
         auto gainRow = bounds.removeFromTop(34);
         gainLabel.setBounds(gainRow.removeFromLeft(108));
@@ -578,6 +592,7 @@ void MainComponent::applySlopeRegionFromUi()
     const float maxHz = static_cast<float>(slopeRegionSlider.getMaxValue());
     spectralDisplay.setSlopeRegion(minHz, maxHz);
     updateSlopeRegionLabels();
+    updateSlopeReadout();
 }
 
 void MainComponent::captureSlopeReference()
@@ -644,6 +659,14 @@ void MainComponent::applyCubicFitFromUi()
 void MainComponent::applyFitPeaksFromUi()
 {
     spectralDisplay.setFitPeaksOnly(fitPeaksToggle.getToggleState());
+    updateSlopeReadout();
+}
+
+void MainComponent::applyAveragingFromUi()
+{
+    const bool enabled = averageToggle.getToggleState();
+    spectralDisplay.setAveragingEnabled(enabled);
+    clearAverageButton.setEnabled(enabled);
     updateSlopeReadout();
 }
 
@@ -840,7 +863,7 @@ void MainComponent::setControlsVisible(bool visible)
         &slopeRegionLabel, &slopeRegionSlider, &minSlopeFreqValueLabel, &maxSlopeFreqValueLabel,
         &captureReferenceButton, &clearReferenceButton,
         &loadTargetButton, &manualTargetToggle, &targetSlopeSlider, &targetSlopeValueLabel,
-        &cubicFitToggle, &fitPeaksToggle
+        &cubicFitToggle, &fitPeaksToggle, &averageToggle, &clearAverageButton
     };
 
     for (auto* c : controls)
