@@ -3,6 +3,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include "MainComponent.h"
+#include "Version.h"
 
 // ---------------------------------------------------------------------------
 // spex — realtime audio input spectrograph.
@@ -11,7 +12,7 @@ class SpexApplication final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override    { return "spex"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
+    const juce::String getApplicationVersion() override { return SPEX_VERSION_STRING; }
     bool moreThanOneInstanceAllowed() override          { return true; }
 
     void initialise(const juce::String&) override

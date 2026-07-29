@@ -4,6 +4,8 @@
 #include <cmath>
 #include <functional>
 
+#include "Version.h"
+
 namespace
 {
 constexpr int kFeatureCount = spex::numSpectralFeatures;
@@ -491,6 +493,11 @@ void MainComponent::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0x88ffffff));
     g.setFont(14.0f);
     g.drawText("Realtime audio spectrum", 16, 12, 280, 24, juce::Justification::centredLeft, false);
+
+    g.setColour(juce::Colour(0x44ffffff));
+    g.setFont(11.0f);
+    g.drawText("v" SPEX_VERSION_STRING "  " SPEX_GIT_HASH,
+               300, 12, 260, 24, juce::Justification::centredLeft, false);
 
     if (featurePanelVisible && !featurePanelBounds.isEmpty())
     {
