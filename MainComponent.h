@@ -47,6 +47,8 @@ private:
     void applyFitPeaksFromUi();
     void applyPeakFloorFromUi();
     void applyAveragingFromUi();
+    void applyWaterfallVisibilityFromUi();
+    void applyEnvelopeVisibilityFromUi();
     void captureSlopeReference();
     void clearSlopeReference();
     void loadTargetAudio();
@@ -98,6 +100,8 @@ private:
     juce::Label               peakFloorValueLabel;
     juce::ToggleButton        averageToggle;
     juce::TextButton          clearAverageButton { "Clear Avg" };
+    juce::ToggleButton        waterfallToggle;
+    juce::ToggleButton        envelopeToggle;
     juce::Label               slopeReadoutLabel;
     juce::Label               gainLabel;
     juce::Slider              gainSlider;

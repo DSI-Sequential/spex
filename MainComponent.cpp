@@ -282,6 +282,16 @@ MainComponent::MainComponent()
     averageToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
     averageToggle.onClick = [this] { applyAveragingFromUi(); };
 
+    waterfallToggle.setButtonText("Waterfall");
+    waterfallToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
+    waterfallToggle.setToggleState(true, juce::dontSendNotification);
+    waterfallToggle.onClick = [this] { applyWaterfallVisibilityFromUi(); };
+
+    envelopeToggle.setButtonText("Envelope");
+    envelopeToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
+    envelopeToggle.setToggleState(true, juce::dontSendNotification);
+    envelopeToggle.onClick = [this] { applyEnvelopeVisibilityFromUi(); };
+
     clearAverageButton.onClick = [this] { spectralDisplay.clearAveraging(); };
     clearAverageButton.setEnabled(false);
 
@@ -353,6 +363,8 @@ MainComponent::MainComponent()
     addAndMakeVisible(peakFloorValueLabel);
     addAndMakeVisible(averageToggle);
     addAndMakeVisible(clearAverageButton);
+    addAndMakeVisible(waterfallToggle);
+    addAndMakeVisible(envelopeToggle);
     addAndMakeVisible(slopeReadoutLabel);
     addAndMakeVisible(gainLabel);
     addAndMakeVisible(gainSlider);
@@ -548,6 +560,10 @@ void MainComponent::resized()
         clearAverageButton.setBounds(floorRow.removeFromLeft(110));
         floorRow.removeFromLeft(16);
         peakMarkersToggle.setBounds(floorRow.removeFromLeft(120));
+        floorRow.removeFromLeft(8);
+        waterfallToggle.setBounds(floorRow.removeFromLeft(116));
+        floorRow.removeFromLeft(8);
+        envelopeToggle.setBounds(floorRow.removeFromLeft(104));
 
         auto gainRow = bounds.removeFromTop(34);
         gainLabel.setBounds(gainRow.removeFromLeft(108));
@@ -723,6 +739,20 @@ void MainComponent::applyAveragingFromUi()
     spectralDisplay.setAveragingEnabled(enabled);
     clearAverageButton.setEnabled(enabled);
     updateSlopeReadout();
+}
+
+void MainComponent::applyWaterfallVisibilityFromUi()
+{
+    spectralDisplay.setShowWaterfall(waterfallToggle.getToggleState());
+    resized();
+    repaint();
+}
+
+void MainComponent::applyEnvelopeVisibilityFromUi()
+{
+    spectralDisplay.setShowEnvelope(envelopeToggle.getToggleState());
+    resized();
+    repaint();
 }
 
 void MainComponent::applyFreqWarpFromUi()
@@ -919,7 +949,8 @@ void MainComponent::setControlsVisible(bool visible)
         &captureReferenceButton, &clearReferenceButton,
         &loadTargetButton, &manualTargetToggle, &targetSlopeSlider, &targetSlopeValueLabel,
         &cubicFitToggle, &fitPeaksToggle, &averageToggle, &clearAverageButton,
-        &peakFloorLabel, &peakFloorSlider, &peakFloorValueLabel, &peakMarkersToggle
+        &peakFloorLabel, &peakFloorSlider, &peakFloorValueLabel, &peakMarkersToggle,
+        &waterfallToggle, &envelopeToggle
     };
 
     for (auto* c : controls)

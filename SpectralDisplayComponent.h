@@ -51,6 +51,8 @@ public:
 
     void setSampleRate(float sr) { sampleRate = sr; }
     void setScrollingPaused(bool paused) { scrollingPaused = paused; }
+    void setShowWaterfall(bool shouldShow) { showWaterfall = shouldShow; repaint(); }
+    void setShowEnvelope(bool shouldShow) { showEnvelope = shouldShow; repaint(); }
     void setFeatureFrequencyRange(float minHz, float maxHz)
     {
         featureAnalyzer.setFeatureFrequencyRange(minHz, maxHz);
@@ -366,8 +368,19 @@ public:
     {
         g.fillAll(juce::Colour(0xff0c0c0c));
         const auto b = getLocalBounds();
-        paintWaterfall(g, b.withHeight(waterfallH()));
-        paintEnvelope (g, b.withTrimmedTop(waterfallH()));
+        if (showWaterfall && showEnvelope)
+        {
+            paintWaterfall(g, b.withHeight(waterfallH()));
+            paintEnvelope (g, b.withTrimmedTop(waterfallH()));
+        }
+        else if (showWaterfall)
+        {
+            paintWaterfall(g, b);
+        }
+        else if (showEnvelope)
+        {
+            paintEnvelope(g, b);
+        }
     }
 
 private:
@@ -1071,4 +1084,6 @@ private:
 
     juce::Image wfImg;
     int wfRow { 0 };
+    bool showWaterfall { true };
+    bool showEnvelope { true };
 };
