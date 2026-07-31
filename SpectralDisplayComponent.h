@@ -47,6 +47,7 @@ public:
             hannWin[i] = 0.5f - 0.5f * std::cos(juce::MathConstants<float>::twoPi * t);
         }
         mag.fill(floorDb);
+        setMouseCursor(juce::MouseCursor::CrosshairCursor);
     }
 
     void setSampleRate(float sr) { sampleRate = sr; }
@@ -98,6 +99,8 @@ public:
     }
 
     void setShowPolynomialFit(bool shouldShow) { showPoly = shouldShow; repaint(); }
+    void setShowRegression(bool shouldShow) { showRegression = shouldShow; repaint(); }
+    bool isShowingRegression() const { return showRegression; }
 
     // Overlay precise peak markers (parabolic-interpolated in x/y) on the
     // envelope so the reader isn't misled by line/pixel interpolation when
@@ -381,6 +384,20 @@ public:
         {
             paintEnvelope(g, b);
         }
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        cursorX = e.x;
+        cursorY = e.y;
+        cursorVisible = true;
+        repaint();
+    }
+
+    void mouseExit(const juce::MouseEvent& /*e*/) override
+    {
+        cursorVisible = false;
+        repaint();
     }
 
 private:
@@ -697,7 +714,7 @@ private:
                     liveFit, livePoly);
     }
 
-    // dB -> waterfall colour.
+    // dB -> waterfall colour and its inverse (used for waterfall cursor readout).
     static juce::Colour dbToColour(float db)
     {
         const float t = std::clamp((db - floorDb) / -floorDb, 0.0f, 1.0f);
@@ -705,6 +722,20 @@ private:
         if (t < 0.5f)  return juce::Colour::fromFloatRGBA(0.0f,           (t - 0.25f) * 4.0f,     1.0f,               1.0f);
         if (t < 0.75f) return juce::Colour::fromFloatRGBA((t - 0.5f)*4.f, 1.0f, 1.0f-(t-0.5f)*4.f, 1.0f);
         return                 juce::Colour::fromFloatRGBA(1.0f,           1.0f,                   (t-0.75f)*4.0f,     1.0f);
+    }
+
+    // Reverse the 4-segment heat-map encoding to recover approximate dB.
+    static float colourToDb(juce::Colour c)
+    {
+        const float r  = c.getFloatRed();
+        const float gr = c.getFloatGreen();
+        const float b  = c.getFloatBlue();
+        float t;
+        if      (r < 0.02f && gr < 0.02f) t = b  * 0.25f;          // black→blue
+        else if (r < 0.02f)               t = gr * 0.25f + 0.25f;  // blue→cyan
+        else if (r < 0.98f)               t = r  * 0.25f + 0.5f;   // cyan→yellow
+        else                              t = b  * 0.25f + 0.75f;  // yellow→white
+        return std::clamp(t, 0.0f, 1.0f) * (-floorDb) + floorDb;
     }
 
     void pushWaterfallRow()
@@ -748,6 +779,49 @@ private:
                 g.drawVerticalLine(px, static_cast<float>(by), static_cast<float>(by + H));
             }
         }
+
+        // Cursor: vertical line + Hz/dB readout in a fixed corner box.
+        if (cursorVisible && cursorX >= bx && cursorX < bx + W)
+        {
+            g.setColour(juce::Colour(0x88ffffff));
+            g.drawVerticalLine(cursorX, static_cast<float>(by), static_cast<float>(by + H));
+
+            const float hz = xToHz(cursorX - bx, W);
+            const juce::String hzStr = hz >= 1000.0f
+                ? juce::String(hz / 1000.0f, 2) + " kHz"
+                : juce::String(static_cast<int>(std::round(hz))) + " Hz";
+
+            // Sample the waterfall image pixel at (cursorX, cursorY) and reverse
+            // the colour encoding to recover the approximate dB magnitude.
+            bool haveDb = false;
+            float wfDb  = floorDb;
+            if (wfImg.isValid() && cursorY >= by && cursorY < by + H)
+            {
+                const int localY = cursorY - by;
+                const int imgH   = wfImg.getHeight();
+                const int partAH = imgH - wfRow;
+                const int imgY   = std::clamp(localY < partAH ? wfRow + localY
+                                                               : localY - partAH,
+                                              0, imgH - 1);
+                const int imgX   = std::clamp(cursorX - bx, 0, wfImg.getWidth() - 1);
+                wfDb   = colourToDb(wfImg.getPixelAt(imgX, imgY));
+                haveDb = true;
+            }
+
+            constexpr int lineH = 14, rW = 82, rX0 = 6;
+            const int rLines = haveDb ? 2 : 1;
+            const int rH = rLines * lineH + 6;
+            const int rX = bx + rX0, rY = by + 6;
+            g.setColour(juce::Colour(0xbb000000));
+            g.fillRoundedRectangle(static_cast<float>(rX), static_cast<float>(rY),
+                                   static_cast<float>(rW), static_cast<float>(rH), 3.0f);
+            g.setColour(juce::Colour(0xeeffffff));
+            g.setFont(11.0f);
+            g.drawText(hzStr, rX + 4, rY + 3, rW - 8, lineH, juce::Justification::centredLeft, false);
+            if (haveDb)
+                g.drawText(juce::String(wfDb, 1) + " dB",
+                           rX + 4, rY + 3 + lineH, rW - 8, lineH, juce::Justification::centredLeft, false);
+        }
     }
 
     void paintEnvelope(juce::Graphics& g, juce::Rectangle<int> bounds)
@@ -773,10 +847,10 @@ private:
             g.drawHorizontalLine(static_cast<int>(dbToY(db)),
                                  static_cast<float>(bx), static_cast<float>(bx + W));
 
-        // Slope-analysis region band.
+        // Slope-analysis region band (only when regression overlay is on).
         const float regionLo = std::clamp(std::min(slopeRegionMinHz, slopeRegionMaxHz), minFreq, sampleRate * 0.5f);
         const float regionHi = std::clamp(std::max(slopeRegionMinHz, slopeRegionMaxHz), minFreq, sampleRate * 0.5f);
-        if (regionHi > regionLo)
+        if (showRegression && regionHi > regionLo)
         {
             const float rxLo = static_cast<float>(bx) + hzToX(regionLo, W);
             const float rxHi = static_cast<float>(bx) + hzToX(regionHi, W);
@@ -839,7 +913,7 @@ private:
         }
 
         // Frozen/imported reference envelope (target to match), ghost line.
-        if (hasRef)
+        if (showRegression && hasRef)
         {
             juce::Path refLine;
             bool refStarted = false;
@@ -910,12 +984,15 @@ private:
                        juce::Justification::centredRight, false);
         };
 
-        if (hasRef)
-            drawFitLine(refFit, juce::Colour(0xbbffffff), true, "target ");
-        drawFitLine(liveFit, juce::Colour(0xffffd54f), false, "");
+        if (showRegression)
+        {
+            if (hasRef)
+                drawFitLine(refFit, juce::Colour(0xbbffffff), true, "target ");
+            drawFitLine(liveFit, juce::Colour(0xffffd54f), false, "");
+        }
 
         // Cubic-polynomial fits (optional), matching the offline analysis.
-        if (showPoly)
+        if (showRegression && showPoly)
         {
             auto drawPolyCurve = [&](const PolyFit& p, juce::Colour colour, bool dashed)
             {
@@ -979,12 +1056,25 @@ private:
         }
 
         // Manual numeric target: ideal straight roll-off line at a chosen
-        // slope, anchored to the live curve at the region's low edge so the
-        // slope shape can be compared directly.
-        if (manualTargetEnabled && regionHi > regionLo)
+        // slope, placed to minimise the vertical distance to the live
+        // regression line. Both lines cross at the log-frequency midpoint of
+        // the region, so slope differences are immediately visible.
+        if (showRegression && manualTargetEnabled && regionHi > regionLo)
         {
-            const float anchorDb = liveFit.valid ? hzToDb(regionLo) : -12.0f;
-            const float intercept = anchorDb - manualTargetSlope * std::log2(regionLo / 1000.0f);
+            float intercept;
+            if (liveFit.valid)
+            {
+                // Optimal vertical offset: the two lines intersect at the
+                // centre of the analysis region (in log2(hz/1kHz) space).
+                const float xMid = 0.5f * (std::log2(regionLo / 1000.0f)
+                                          + std::log2(regionHi / 1000.0f));
+                intercept = liveFit.interceptDb
+                           - (manualTargetSlope - liveFit.slopeDbPerOct) * xMid;
+            }
+            else
+            {
+                intercept = -20.0f; // nominal when no live fit is available yet
+            }
             const float x1 = static_cast<float>(bx) + hzToX(regionHi, W);
             const float y1 = dbToY(manualTargetSlope * std::log2(regionHi / 1000.0f) + intercept);
 
@@ -1045,6 +1135,43 @@ private:
                 }
             }
         }
+
+        // Cursor: vertical + horizontal lines, plus a fixed-position readout box.
+        if (cursorVisible && cursorX >= bx && cursorX < bx + W)
+        {
+            const bool inPanel = (cursorY >= by && cursorY < by + static_cast<int>(usableH));
+
+            g.setColour(juce::Colour(0x88ffffff));
+            g.drawVerticalLine(cursorX, static_cast<float>(by), static_cast<float>(by) + usableH);
+            if (inPanel)
+                g.drawHorizontalLine(cursorY, static_cast<float>(bx), static_cast<float>(bx + W));
+
+            const float hz = xToHz(cursorX - bx, W);
+            const juce::String hzStr = hz >= 1000.0f
+                ? juce::String(hz / 1000.0f, 2) + " kHz"
+                : juce::String(static_cast<int>(std::round(hz))) + " Hz";
+
+            constexpr int lineH = 14, rW = 82, rX0 = 6;
+            const int rLines = inPanel ? 2 : 1;
+            const int rH = rLines * lineH + 6;
+            const int rX = bx + rX0, rY = by + 6;
+            g.setColour(juce::Colour(0xbb000000));
+            g.fillRoundedRectangle(static_cast<float>(rX), static_cast<float>(rY),
+                                   static_cast<float>(rW), static_cast<float>(rH), 3.0f);
+            g.setColour(juce::Colour(0xeeffffff));
+            g.setFont(11.0f);
+            g.drawText(hzStr, rX + 4, rY + 3, rW - 8, lineH, juce::Justification::centredLeft, false);
+            if (inPanel)
+            {
+                const float cursorDb = juce::jmap(static_cast<float>(cursorY),
+                                                   static_cast<float>(by),
+                                                   static_cast<float>(by) + usableH,
+                                                   0.0f, floorDb);
+                g.drawText(juce::String(cursorDb, 1) + " dB",
+                           rX + 4, rY + 3 + lineH, rW - 8, lineH,
+                           juce::Justification::centredLeft, false);
+            }
+        }
     }
 
     juce::dsp::FFT fft { fftOrder };
@@ -1073,6 +1200,7 @@ private:
     juce::String referenceName;
     bool  showPoly { false };
     bool  showPeakMarkers { false };
+    bool  showRegression { true };
     bool  manualTargetEnabled { false };
     float manualTargetSlope { -6.97f };
     bool  fitPeaksOnly { true };   // fit regression to spectral peaks only
@@ -1084,6 +1212,10 @@ private:
 
     juce::Image wfImg;
     int wfRow { 0 };
+    bool cursorVisible { false };
+    int  cursorX { 0 };
+    int  cursorY { 0 };
+
     bool showWaterfall { true };
     bool showEnvelope { true };
 };

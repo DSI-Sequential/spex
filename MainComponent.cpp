@@ -293,6 +293,11 @@ MainComponent::MainComponent()
     envelopeToggle.setToggleState(true, juce::dontSendNotification);
     envelopeToggle.onClick = [this] { applyEnvelopeVisibilityFromUi(); };
 
+    regressionToggle.setButtonText("Regression");
+    regressionToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd1d5db));
+    regressionToggle.setToggleState(true, juce::dontSendNotification);
+    regressionToggle.onClick = [this] { applyRegressionFromUi(); };
+
     clearAverageButton.onClick = [this] { spectralDisplay.clearAveraging(); };
     clearAverageButton.setEnabled(false);
 
@@ -302,7 +307,7 @@ MainComponent::MainComponent()
 
     gainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     gainSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    gainSlider.setRange(-12.0, 12.0, 0.1);
+    gainSlider.setRange(-12.0, 24.0, 0.1);
     gainSlider.setValue(0.0, juce::dontSendNotification);
     gainSlider.onValueChange = [this]
     {
@@ -366,6 +371,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(clearAverageButton);
     addAndMakeVisible(waterfallToggle);
     addAndMakeVisible(envelopeToggle);
+    addAndMakeVisible(regressionToggle);
     addAndMakeVisible(slopeReadoutLabel);
     addAndMakeVisible(gainLabel);
     addAndMakeVisible(gainSlider);
@@ -402,6 +408,7 @@ MainComponent::MainComponent()
     applyPeakMarkersFromUi();
     applyFreqWarpFromUi();
     applyAveragingFromUi();
+    applyRegressionFromUi();
 
     setSize(1320, 800);
 
@@ -588,6 +595,8 @@ void MainComponent::resized()
         captureReferenceButton.setBounds(slopeRow.removeFromLeft(112));
         slopeRow.removeFromLeft(8);
         clearReferenceButton.setBounds(slopeRow.removeFromLeft(112));
+        slopeRow.removeFromLeft(16);
+        regressionToggle.setBounds(slopeRow.removeFromLeft(130));
 
         auto targetRow = bounds.removeFromTop(34);
         loadTargetButton.setBounds(targetRow.removeFromLeft(150));
@@ -754,6 +763,11 @@ void MainComponent::applyEnvelopeVisibilityFromUi()
     spectralDisplay.setShowEnvelope(envelopeToggle.getToggleState());
     resized();
     repaint();
+}
+
+void MainComponent::applyRegressionFromUi()
+{
+    spectralDisplay.setShowRegression(regressionToggle.getToggleState());
 }
 
 void MainComponent::applyFreqWarpFromUi()
@@ -948,7 +962,7 @@ void MainComponent::setControlsVisible(bool visible)
         &gainLabel, &gainSlider, &gainValueLabel,
         &freqWarpLabel, &freqWarpSlider, &freqWarpValueLabel,
         &slopeRegionLabel, &slopeRegionSlider, &minSlopeFreqValueLabel, &maxSlopeFreqValueLabel,
-        &captureReferenceButton, &clearReferenceButton,
+        &captureReferenceButton, &clearReferenceButton, &regressionToggle,
         &loadTargetButton, &manualTargetToggle, &targetSlopeSlider, &targetSlopeValueLabel,
         &cubicFitToggle, &fitPeaksToggle, &averageToggle, &clearAverageButton,
         &peakFloorLabel, &peakFloorSlider, &peakFloorValueLabel, &peakMarkersToggle,
