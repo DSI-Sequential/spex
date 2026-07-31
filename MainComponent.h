@@ -49,6 +49,7 @@ private:
     void applyAveragingFromUi();
     void applyWaterfallVisibilityFromUi();
     void applyEnvelopeVisibilityFromUi();
+    void applyRegressionFromUi();
     void captureSlopeReference();
     void clearSlopeReference();
     void loadTargetAudio();
@@ -102,6 +103,7 @@ private:
     juce::TextButton          clearAverageButton { "Clear Avg" };
     juce::ToggleButton        waterfallToggle;
     juce::ToggleButton        envelopeToggle;
+    juce::ToggleButton        regressionToggle;
     juce::Label               slopeReadoutLabel;
     juce::Label               gainLabel;
     juce::Slider              gainSlider;
