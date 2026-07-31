@@ -307,7 +307,7 @@ MainComponent::MainComponent()
 
     gainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     gainSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    gainSlider.setRange(-12.0, 12.0, 0.1);
+    gainSlider.setRange(-12.0, 24.0, 0.1);
     gainSlider.setValue(0.0, juce::dontSendNotification);
     gainSlider.onValueChange = [this]
     {
