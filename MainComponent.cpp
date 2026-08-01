@@ -681,15 +681,18 @@ void MainComponent::loadTargetAudio()
     const int flags = juce::FileBrowserComponent::openMode
                     | juce::FileBrowserComponent::canSelectFiles;
 
-    importChooser->launchAsync(flags, [this](const juce::FileChooser& chooser)
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+    importChooser->launchAsync(flags, [safeThis](const juce::FileChooser& chooser)
     {
+        if (safeThis == nullptr)
+            return;
         const auto file = chooser.getResult();
         if (file != juce::File())
         {
-            if (spectralDisplay.analyzeReferenceFile(file))
+            if (safeThis->spectralDisplay.analyzeReferenceFile(file))
             {
-                clearReferenceButton.setEnabled(true);
-                updateSlopeReadout();
+                safeThis->clearReferenceButton.setEnabled(true);
+                safeThis->updateSlopeReadout();
             }
             else
             {
@@ -699,7 +702,7 @@ void MainComponent::loadTargetAudio()
             }
         }
 
-        importChooser.reset();
+        safeThis->importChooser.reset();
     });
 }
 
@@ -1013,11 +1016,17 @@ void MainComponent::exportCaptureCsv()
                     | juce::FileBrowserComponent::canSelectFiles
                     | juce::FileBrowserComponent::warnAboutOverwriting;
 
-    exportChooser->launchAsync(flags, [this](const juce::FileChooser& chooser)
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+    exportChooser->launchAsync(flags, [safeThis](const juce::FileChooser& chooser)
     {
+        if (safeThis == nullptr)
+            return;
         const auto target = chooser.getResult();
         if (target == juce::File())
+        {
+            safeThis->exportChooser.reset();
             return;
+        }
 
         juce::StringArray lines;
         juce::String header = "time_seconds";
@@ -1025,7 +1034,7 @@ void MainComponent::exportCaptureCsv()
             header << "," << csvHeaderName(i);
         lines.add(header);
 
-        for (const auto& row : captureRows)
+        for (const auto& row : safeThis->captureRows)
         {
             juce::String line;
             line << juce::String(row.timeSeconds, 6);
@@ -1049,7 +1058,7 @@ void MainComponent::exportCaptureCsv()
                                                    "Failed to write CSV file.");
         }
 
-        exportChooser.reset();
+        safeThis->exportChooser.reset();
     });
 }
 
